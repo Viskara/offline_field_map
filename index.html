@@ -157,23 +157,6 @@
         }
 
         
-        .recenter-button {
-            position: absolute;
-            bottom: 100px;
-            left: 10px;
-            z-index: 1000;
-            background: var(--accent-green);
-            color: white;
-            padding: 7px 14px;
-            border-radius: var(--radius);
-            font-weight: 700;
-            font-size: 12px;
-            cursor: pointer;
-            border: none;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            display: none;
-            transition: background 0.2s;
-        }
 
         
         #zoomToMeButton {
@@ -1082,9 +1065,7 @@
         Zoom to Me
     </button>
 
-    <button id="recenterButton" class="recenter-button" onclick="recenterGPS()">
-        🎯 Recenter
-    </button>
+    
 
     
     <div id="quickDrawBar">
@@ -3058,51 +3039,19 @@
             showToast(`✅ Exported ${ptCount} point(s), ${lnCount} line(s) — ${filename}`, 'success');
         };
 
-        window.stopTracking = function() {
-            if (recenterInterval) { clearInterval(recenterInterval); recenterInterval = null; }
-            const btn = document.getElementById('recenterButton');
-            btn.innerHTML = '🎯 Recenter';
-            btn.onclick = recenterGPS;
-            btn.style.background = 'var(--accent-green)';
-        };
-
         window.toggleGpsTracking = function() {
             if (isGpsActive) {
                 isGpsActive = false;
-                stopTracking();
+                if (recenterInterval) { clearInterval(recenterInterval); recenterInterval = null; }
                 if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
                 document.getElementById('gpsLabel').textContent = 'GPS';
                 document.getElementById('gpsStartButton').classList.remove('active');
-                document.getElementById('recenterButton').style.display = 'none';
                 const gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
                 if (gpsLayer) { gpsLayer.getSource().clear(); map.removeLayer(gpsLayer); gpsSource = null; }
                 document.getElementById('locationIndicator').innerHTML = 'GPS Disabled. <span id="offlineBadge" class="' + (isOnline ? '' : 'show') + '">OFFLINE</span>';
                 document.getElementById('locationIndicator').style.background = '#475569';
             } else {
                 startGeolocation();
-            }
-        };
-
-        window.recenterGPS = function() {
-            const view = map.getView();
-            const gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
-            const lastFeature = gpsLayer && gpsLayer.getSource() ? gpsLayer.getSource().getFeatures()[0] : null;
-            if (!lastFeature) return;
-
-            view.cancelAnimations();
-            view.animate({ center: lastFeature.getGeometry().getCoordinates(), duration: 500 });
-
-            if (!recenterInterval) {
-                recenterInterval = setInterval(() => {
-                    const cur = gpsLayer.getSource() ? gpsLayer.getSource().getFeatures()[0] : null;
-                    if (cur) view.animate({ center: cur.getGeometry().getCoordinates(), duration: 500, easing: ol.easing.linear });
-                }, 2000);
-                const btn = document.getElementById('recenterButton');
-                btn.innerHTML = '🛑 Stop Auto-Track';
-                btn.style.background = 'var(--accent-red)';
-                btn.onclick = stopTracking;
-            } else {
-                stopTracking();
             }
         };
 
@@ -3116,7 +3065,6 @@
             gpsFirstFix = true;
             document.getElementById('gpsLabel').textContent = 'GPS Active';
             document.getElementById('gpsStartButton').classList.add('active');
-            document.getElementById('recenterButton').style.display = 'block';
 
             let gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
             if (!gpsLayer) {
@@ -3198,10 +3146,9 @@
                 locationIndicator.innerHTML = `GPS Error (${error.code}): ${error.message}`;
                 locationIndicator.style.background = 'var(--accent-red)';
                 isGpsActive = false;
+                if (recenterInterval) { clearInterval(recenterInterval); recenterInterval = null; }
                 document.getElementById('gpsLabel').textContent = 'GPS';
                 document.getElementById('gpsStartButton').classList.remove('active');
-                document.getElementById('recenterButton').style.display = 'none';
-                stopTracking();
             }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
         };
 
