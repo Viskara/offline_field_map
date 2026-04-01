@@ -1,43 +1,41 @@
-const CACHE_NAME = 'field-map-v2';
-const TILE_CACHE = 'field-map-tiles-v1';
+const CACHE = "field-map-offline-v1";
+const TILE_CACHE = "field-map-tiles-v1";
 
-const APP_SHELL = [
-  './index.html',
-  './offline.html',
-  './manifest.json',
-  './sw.js',
-  './icon-48.png',
-  './icon-96.png',
-  './icon-192.png',
-  './icon-512.png',
-  'https://cdn.jsdelivr.net/npm/ol@v8.2.0/ol.css',
-  'https://cdn.jsdelivr.net/npm/ol@v8.2.0/dist/ol.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',
-];
+importScripts('https://storage.googleapis.com/workbox-cdn/releases/5.1.2/workbox-sw.js');
 
-self.addEventListener('install', event => {
+const offlineFallbackPage = "offline.html";
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
+self.addEventListener('install', async (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL).catch(() => {}))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE).then((cache) => cache.addAll([
+      offlineFallbackPage,
+      'index.html',
+      'manifest.json',
+      'icon-192.png',
+      'icon-512.png',
+    ])).catch(() => {})
   );
 });
 
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys
-        .filter(k => k !== CACHE_NAME && k !== TILE_CACHE)
-        .map(k => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
-  );
-});
+if (workbox.navigationPreload.isSupported()) {
+  workbox.navigationPreload.enable();
+}
 
-self.addEventListener('fetch', event => {
+workbox.routing.registerRoute(
+  new RegExp('/*'),
+  new workbox.strategies.StaleWhileRevalidate({
+    cacheName: CACHE
+  })
+);
+
+self.addEventListener('fetch', (event) => {
   const url = event.request.url;
-  const isNavigation = event.request.mode === 'navigate';
 
   const isTile = /\/\d+\/\d+\/\d+\.(png|jpg|jpeg)/.test(url) ||
                  url.includes('tile.openstreetmap') ||
@@ -70,39 +68,29 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (isNavigation) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-          return response;
-        })
-        .catch(() =>
-          caches.match('./index.html')
-            .then(cached => cached || caches.match('./offline.html'))
-        )
-    );
+  if (event.request.mode === 'navigate') {
+    event.respondWith((async () => {
+      try {
+        const preloadResp = await event.preloadResponse;
+        if (preloadResp) return preloadResp;
+        const networkResp = await fetch(event.request);
+        return networkResp;
+      } catch (error) {
+        const cache = await caches.open(CACHE);
+        const cachedResp = await cache.match('index.html')
+          || await cache.match(offlineFallbackPage);
+        return cachedResp;
+      }
+    })());
     return;
   }
-
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then(response => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => caches.match('./offline.html'));
-    })
-  );
 });
 
-self.addEventListener('message', async event => {
+self.addEventListener('message', async (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+    return;
+  }
   if (event.data.type === 'CACHE_TILES') {
     const { urls } = event.data;
     const cache = await caches.open(TILE_CACHE);
@@ -118,15 +106,41 @@ self.addEventListener('message', async event => {
     }
     event.source.postMessage({ type: 'CACHE_DONE', total });
   }
-
   if (event.data.type === 'CLEAR_TILE_CACHE') {
     await caches.delete(TILE_CACHE);
     event.source.postMessage({ type: 'TILE_CACHE_CLEARED' });
   }
-
   if (event.data.type === 'TILE_CACHE_SIZE') {
     const cache = await caches.open(TILE_CACHE);
     const keys = await cache.keys();
     event.source.postMessage({ type: 'TILE_CACHE_SIZE_RESULT', count: keys.length });
   }
+});
+
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'content-sync') {
+    event.waitUntil(Promise.resolve());
+  }
+});
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-data') {
+    event.waitUntil(Promise.resolve());
+  }
+});
+
+self.addEventListener('push', (event) => {
+  const data = event.data ? event.data.text() : 'New update available';
+  event.waitUntil(
+    self.registration.showNotification('Field Map', {
+      body: data,
+      icon: 'icon-192.png',
+      badge: 'icon-96.png'
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(clients.openWindow('./index.html'));
 });
