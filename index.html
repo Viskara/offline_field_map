@@ -850,8 +850,11 @@
         function registerServiceWorker() {
             if (!('serviceWorker' in navigator)) return;
             if (location.protocol === 'file:') return;
-            navigator.serviceWorker.register('sw.js', { scope: './' })
-                .then(() => navigator.serviceWorker.addEventListener('message', handleSWMessage))
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => {
+                    reg.update();
+                    navigator.serviceWorker.addEventListener('message', handleSWMessage);
+                })
                 .catch(() => {});
         }
 
