@@ -4,12 +4,18 @@
   "description": "Offline-ready field logging map with GPS tracking, CSV layer import, and tile caching.",
   "start_url": "index.html",
   "id": "index.html",
+  "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "orientation": "any",
   "background_color": "#1a2030",
   "theme_color": "#1a2030",
   "lang": "en",
+  "dir": "ltr",
   "categories": ["utilities", "productivity"],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
   "icons": [
     {
       "src": "icon-48.png",
@@ -43,6 +49,13 @@
       "type": "image/png",
       "label": "Field Logging Map",
       "form_factor": "wide"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "label": "Field Logging Map",
+      "form_factor": "narrow"
     }
   ],
   "shortcuts": [
