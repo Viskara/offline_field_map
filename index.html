@@ -1,0 +1,3425 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <meta name="theme-color" content="#1a2030" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Field Map" />
+    <title>Field Logging Map – Offline Ready</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v8.2.0/ol.css">
+    <script src="https://cdn.jsdelivr.net/npm/ol@v8.2.0/dist/ol.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;700&display=swap');
+
+        *, *::before, *::after { box-sizing: border-box; }
+
+        :root {
+            --bg-dark: #1a2030;
+            --bg-panel: rgba(20, 28, 45, 0.97);
+            --accent-blue: #3b9eff;
+            --accent-green: #2ecc71;
+            --accent-orange: #f7a800;
+            --accent-red: #e74c3c;
+            --accent-gray: #64748b;
+            --text-primary: #e8edf5;
+            --text-muted: #8899aa;
+            --border: rgba(255,255,255,0.1);
+            --toolbar-h: 52px;
+            --status-h: 0px;
+            --radius: 6px;
+            --font: 'DM Sans', Arial, sans-serif;
+            --font-mono: 'DM Mono', monospace;
+        }
+
+        html, body {
+            padding: 0; margin: 0;
+            height: 100%; width: 100%;
+            font-family: var(--font);
+            overflow: hidden;
+            background: var(--bg-dark);
+        }
+
+        
+
+        
+        #topToolbar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            background: var(--bg-dark);
+            color: white;
+            z-index: 1001;
+            display: flex;
+            padding: 6px 10px;
+            gap: 6px;
+            box-shadow: 0 1px 0 rgba(255,255,255,0.07), 0 4px 16px rgba(0,0,0,0.4);
+            align-items: center;
+            transition: top 0.3s ease;
+        }
+        
+
+        #map {
+            position: absolute;
+            top: var(--toolbar-h);
+            left: 0;
+            height: calc(100% - var(--toolbar-h));
+            width: 100%;
+        }
+
+        
+        #gpsStartButton {
+            background: linear-gradient(135deg, #0f766e, #0d9488);
+            color: white;
+            border: none;
+            border-bottom: 2px solid rgba(0,0,0,0.25);
+            padding: 7px 13px;
+            border-radius: var(--radius);
+            font-weight: 700;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+            white-space: nowrap;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 1px 4px rgba(13,148,136,0.35);
+        }
+        #gpsStartButton:active { transform: scale(0.97); }
+        #gpsStartButton.active {
+            background: linear-gradient(135deg, #0891b2, #06b6d4);
+            box-shadow: 0 0 0 2px rgba(6,182,212,0.4), 0 1px 4px rgba(6,182,212,0.3);
+            border-bottom-color: rgba(0,0,0,0.2);
+        }
+
+        
+        .panel-toggle-button {
+            flex: 1;
+            padding: 7px 6px;
+            font-weight: 600;
+            font-size: 11px;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s, opacity 0.2s;
+            color: white;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            letter-spacing: 0.02em;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .panel-toggle-button:active { transform: scale(0.97); opacity: 0.85; }
+
+        
+        #offlineBadge {
+            display: inline-block;
+            background: var(--accent-orange);
+            color: #000;
+            font-size: 9px;
+            font-weight: 700;
+            border-radius: 3px;
+            padding: 1px 4px;
+            margin-left: 6px;
+            letter-spacing: 0.05em;
+            vertical-align: middle;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #offlineBadge.show { opacity: 1; }
+
+        
+        .location-indicator {
+            position: absolute;
+            bottom: 62px;
+            left: 10px;
+            z-index: 1000;
+            background: #475569;
+            color: white;
+            padding: 7px 12px;
+            border-radius: var(--radius);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: bottom 0.3s ease, background 0.4s ease;
+            pointer-events: none;
+            max-width: calc(100vw - 200px);
+        }
+
+        
+        .recenter-button {
+            position: absolute;
+            bottom: 100px;
+            left: 10px;
+            z-index: 1000;
+            background: var(--accent-green);
+            color: white;
+            padding: 7px 14px;
+            border-radius: var(--radius);
+            font-weight: 700;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            display: none;
+            transition: background 0.2s;
+        }
+
+        
+        #zoomToMeButton {
+            position: absolute;
+            bottom: 34px;
+            left: 10px;
+            z-index: 1000;
+            background: #1e3a5f;
+            color: #7dd3fc;
+            border: 1px solid rgba(125,211,252,0.3);
+            padding: 5px 10px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 11px;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            white-space: nowrap;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        #zoomToMeButton:hover { background: #1d4ed8; color: white; border-color: transparent; }
+        #zoomToMeButton:active { transform: scale(0.97); }
+
+        
+        #cacheProgress {
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1010;
+            background: var(--bg-panel);
+            color: var(--text-primary);
+            padding: 10px 18px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+            min-width: 240px;
+            text-align: center;
+        }
+        #cacheProgressBar {
+            height: 4px;
+            background: var(--accent-blue);
+            border-radius: 2px;
+            margin-top: 6px;
+            transition: width 0.2s;
+            width: 0%;
+        }
+
+        
+        .widget-panel {
+            position: absolute;
+            top: var(--toolbar-h);
+            right: 0;
+            z-index: 1002;
+            background: var(--bg-panel);
+            padding: 0;
+            border-radius: 0 0 0 10px;
+            box-shadow: -4px 4px 20px rgba(0,0,0,0.5);
+            width: 310px;
+            max-height: calc(100vh - var(--toolbar-h));
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: none;
+            border-left: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            transition: top 0.3s ease, max-height 0.3s ease;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.2) transparent;
+        }
+        
+        .widget-panel::-webkit-scrollbar { width: 4px; }
+        .widget-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+
+        .panel-header {
+            padding: 14px 16px 10px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            background: var(--bg-panel);
+            z-index: 1;
+        }
+        .panel-header h3 {
+            margin: 0 0 4px;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: 0.03em;
+        }
+        .panel-header p {
+            margin: 0;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .panel-body { padding: 14px 16px; }
+
+        .panel-section { margin-bottom: 18px; }
+        .panel-section h4 {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            margin: 0 0 8px;
+        }
+
+        
+        .action-button {
+            width: 100%;
+            margin-bottom: 8px;
+            padding: 9px 12px;
+            cursor: pointer;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 12px;
+            font-weight: 600;
+            font-family: var(--font);
+            transition: opacity 0.2s, transform 0.1s;
+            color: white;
+        }
+        .action-button:active { transform: scale(0.98); opacity: 0.85; }
+        .action-export { background: #0079c1; }
+        .action-draw { background: var(--accent-orange); color: #000; }
+
+        select.action-button {
+            background: #334155;
+            color: var(--text-primary);
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="text"], input[type="range"], select:not(.action-button) {
+            background: #1e293b;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-primary);
+            padding: 7px 10px;
+            width: 100%;
+            font-family: var(--font);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        input[type="text"]:focus, select:not(.action-button):focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+        label:not(.layer-check-wrap):not(.layer-group-check) { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px; }
+
+        
+        .file-status {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 11px;
+            color: var(--text-muted);
+            background: rgba(255,255,255,0.03);
+            font-family: var(--font-mono);
+            line-height: 1.6;
+        }
+
+        
+        #layerSwitcher {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1001;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+        #lsBurger {
+            width: 38px; height: 38px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: background 0.2s, border-color 0.2s;
+            flex-shrink: 0;
+        }
+        #lsBurger.open {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+        }
+        #lsBurger span {
+            display: block;
+            width: 16px; height: 2px;
+            background: var(--text-muted);
+            border-radius: 2px;
+            transition: background 0.2s, transform 0.25s, opacity 0.2s;
+        }
+        #lsBurger.open span { background: white; }
+        #lsBurger.open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+        #lsBurger.open span:nth-child(2) { opacity: 0; }
+        #lsBurger.open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+        #lsMenu {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            padding: 5px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(6px);
+            transition: max-height 0.25s ease, opacity 0.2s ease, transform 0.2s ease;
+        }
+        #lsMenu.open {
+            max-height: 400px;
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
+        }
+        #lsMenu button {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 7px 14px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            text-align: left;
+            transition: background 0.15s, color 0.15s;
+        }
+        #lsMenu button:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        #lsMenu button.active {
+            background: #1d4ed8;
+            color: white;
+            border-color: #1d4ed8;
+        }
+
+        
+        #layerList {
+            max-height: 420px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        
+        .layer-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 0 4px;
+            margin-top: 6px;
+            border-bottom: 1px solid var(--border);
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .layer-group-header:first-child { margin-top: 0; }
+        .layer-group-title {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-muted);
+            flex-grow: 1;
+        }
+        .layer-group-chevron {
+            font-size: 10px;
+            color: var(--text-muted);
+            transition: transform 0.2s;
+            flex-shrink: 0;
+        }
+        .layer-group-chevron.collapsed { transform: rotate(-90deg); }
+        .layer-group-body { overflow: hidden; }
+        .layer-group-body.collapsed { display: none; }
+        
+        .layer-group-check {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px; height: 28px;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .layer-group-check input[type="checkbox"] {
+            width: 15px; height: 15px;
+            cursor: pointer;
+            accent-color: var(--accent-blue);
+            margin: 0;
+        }
+        .dynamic-layer-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 0 6px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            gap: 6px;
+            min-width: 0;
+        }
+        .dynamic-layer-item:last-child { border-bottom: none; }
+        .dynamic-layer-item .layer-name {
+            font-size: 11px;
+            color: var(--text-primary);
+            flex-grow: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .dynamic-layer-item .layer-name .name-text {
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        .dynamic-layer-item .layer-name small {
+            color: var(--text-muted);
+            font-size: 10px;
+            display: block;
+        }
+        
+        .dynamic-layer-item .layer-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .layer-zoom-btn {
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(59,158,255,0.12);
+            border: 1px solid rgba(59,158,255,0.3);
+            color: var(--accent-blue);
+            border-radius: 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .layer-zoom-btn:hover { background: rgba(59,158,255,0.25); }
+        .layer-zoom-btn svg { width: 16px; height: 16px; }
+        .layer-remove-btn {
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(127,29,29,0.5);
+            border: 1px solid rgba(252,165,165,0.2);
+            color: #fca5a5;
+            border-radius: 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+            font-size: 14px;
+            font-weight: 700;
+            transition: background 0.15s;
+        }
+        .layer-remove-btn:hover { background: #7f1d1d; }
+        
+        .layer-check-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .layer-check-wrap:active { background: rgba(59,158,255,0.2); }
+        .dynamic-layer-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            accent-color: var(--accent-blue);
+            flex-shrink: 0;
+            margin: 0;
+        }
+
+        
+        .color-palette {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .color-swatch {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.1s;
+        }
+        .color-swatch:hover, .color-swatch.selected { border-color: white; transform: scale(1.15); }
+
+        
+        #offlineStorageBar {
+            background: rgba(247, 168, 0, 0.12);
+            border: 1px solid rgba(247, 168, 0, 0.3);
+            border-radius: var(--radius);
+            padding: 8px 12px;
+            font-size: 11px;
+            color: var(--accent-orange);
+            display: none;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        
+        #toggleImportButton { background: #0369a1; }
+        #toggleImportButton.panel-active { background: #075985; }
+        #toggleLayerManagerButton { background: #475569; }
+        #toggleLayerManagerButton.panel-active { background: #334155; }
+        #toggleMarkupButton { background: #92400e; }
+        #toggleMarkupButton.panel-active { background: #78350f; }
+
+        hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+        #toggleSettingsButton { background: #312e81; }
+        #toggleSettingsButton.panel-active { background: #1e1b4b; }
+
+        #pwaInstallBtn {
+            background: linear-gradient(135deg, #312e81, #4f46e5);
+            color: white; border: none;
+            padding: 7px 11px; border-radius: var(--radius);
+            font-weight: 700; font-size: 11px; cursor: pointer;
+            white-space: nowrap; flex-shrink: 0;
+            display: none; align-items: center; gap: 5px;
+            box-shadow: 0 1px 4px rgba(79,70,229,0.4);
+        }
+        #pwaInstallBtn:active { transform: scale(0.97); }
+
+        .settings-type-row {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 10px 8px; margin-bottom: 8px;
+        }
+        .settings-type-row-header {
+            display: flex; align-items: center;
+            justify-content: space-between; margin-bottom: 8px; gap: 6px;
+        }
+        .settings-type-label { font-size: 11px; font-weight: 700; color: var(--text-primary); flex-grow: 1; }
+        .settings-type-row input[type="text"] { margin-bottom: 6px; }
+        .settings-type-row input[type="color"] {
+            width: 36px; height: 28px; border-radius: 4px;
+            border: 1px solid var(--border); padding: 2px;
+            cursor: pointer; background: #1e293b; flex-shrink: 0; margin-bottom: 0;
+        }
+        .settings-row-grid {
+            display: grid; grid-template-columns: 1fr auto auto;
+            gap: 6px; align-items: center;
+        }
+        .settings-symbol-select {
+            background: #1e293b; border: 1px solid var(--border);
+            border-radius: var(--radius); color: var(--text-primary);
+            padding: 4px 6px; font-size: 11px; width: 52px; text-align: center; margin-bottom: 0;
+        }
+        .st-opacity-val {
+            font-size: 11px; color: var(--text-primary);
+            font-family: var(--font-mono); min-width: 36px; text-align: right; flex-shrink: 0;
+        }
+        .settings-priority-input {
+            background: #1e293b; border: 1px solid var(--border);
+            border-radius: var(--radius); color: var(--text-primary);
+            padding: 4px 6px; font-size: 11px; width: 46px; text-align: center; margin-bottom: 0;
+        }
+        .settings-del-btn {
+            width: 28px; height: 28px; background: rgba(127,29,29,0.5);
+            border: 1px solid rgba(252,165,165,0.2); color: #fca5a5;
+            border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 700;
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+        }
+        .settings-del-btn:hover { background: #7f1d1d; }
+        .gps-perm-info {
+            background: rgba(59,158,255,0.08); border: 1px solid rgba(59,158,255,0.25);
+            border-radius: var(--radius); padding: 9px 11px;
+            font-size: 11px; color: var(--text-muted); line-height: 1.6; margin-bottom: 10px;
+        }
+        .gps-perm-info strong { color: var(--accent-blue); }
+
+        
+        
+        #quickLayerBar {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+            padding: 5px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            width: auto;
+            min-width: 80px;
+            align-items: stretch;
+            align-self: flex-end;
+        }
+        .qlb-section-label {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2px 4px 4px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1px;
+            white-space: nowrap;
+        }
+        .qlb-btn {
+            padding: 7px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.05);
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            text-align: left;
+            width: 100%;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            min-height: 34px;
+        }
+        .qlb-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        .qlb-btn.on { background:rgba(59,158,255,0.18); color:var(--accent-blue); border-color:rgba(59,158,255,0.45); }
+        .qlb-btn.on.type-drilled { background:rgba(247,168,0,0.18); color:var(--accent-orange); border-color:rgba(247,168,0,0.4); }
+        .qlb-btn.on.type-hole   { background:rgba(46,204,113,0.18); color:var(--accent-green);  border-color:rgba(46,204,113,0.4); }
+        .qlb-btn.on.type-log    { background:rgba(155,89,182,0.18); color:#c39bd3;               border-color:rgba(155,89,182,0.4); }
+        .qlb-btn.on.type-samp   { background:rgba(231,76,60,0.18);  color:#fca5a5;               border-color:rgba(231,76,60,0.4); }
+        .qlb-btn.on.type-markup { background:rgba(59,158,255,0.18); color:var(--accent-blue);    border-color:rgba(59,158,255,0.4); }
+        .qlb-btn:active { opacity: 0.75; }
+
+        
+        #quickDrawBar {
+            position: absolute;
+            bottom: 140px;
+            left: 10px;
+            z-index: 1001;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: center;
+            transition: opacity 0.2s ease;
+        }
+        #quickDrawBar .qdb-sep {
+            width: 30px; height: 1px;
+            background: var(--border);
+            margin: 3px 0;
+        }
+        .qdb-btn {
+            width: 40px; height: 40px;
+            border-radius: var(--radius);
+            border: 2px solid var(--border);
+            background: var(--bg-panel);
+            color: var(--text-primary);
+            font-size: 15px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            position: relative;
+            user-select: none;
+        }
+        .qdb-btn svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
+        .qdb-btn:active { transform: scale(0.91); }
+        .qdb-btn.active {
+            background: var(--accent-orange);
+            border-color: var(--accent-orange);
+            color: #000;
+        }
+        .qdb-btn:hover::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 48px; top: 50%; transform: translateY(-50%);
+            background: rgba(0,0,0,0.85); color: #fff;
+            font-size: 11px; font-weight: 600; white-space: nowrap;
+            padding: 4px 9px; border-radius: 4px;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        .qdb-swatch { position: relative; }
+        .qdb-swatch:hover::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 34px; top: 50%; transform: translateY(-50%);
+            background: rgba(0,0,0,0.85); color: #fff;
+            font-size: 11px; font-weight: 600; white-space: nowrap;
+            padding: 4px 9px; border-radius: 4px;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        
+        .qdb-swatch {
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            transition: border-color 0.15s, transform 0.1s;
+            flex-shrink: 0;
+        }
+        .qdb-swatch:hover, .qdb-swatch.selected { border-color: white; transform: scale(1.2); }
+        #qdb-colorPicker {
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            padding: 0; cursor: pointer;
+            background: transparent;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+
+        
+        #cacheAreaBtn {
+            background: #1e3a5f;
+            color: #7dd3fc;
+            border: 1px solid rgba(125, 211, 252, 0.3);
+            padding: 7px 12px;
+            border-radius: var(--radius);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 6px;
+        }
+        #cacheAreaBtn:hover { background: #1d4ed8; color: white; border-color: transparent; }
+
+        
+        #toastContainer {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            pointer-events: none;
+            align-items: center;
+        }
+        .toast {
+            background: var(--bg-panel);
+            color: var(--text-primary);
+            padding: 9px 18px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            animation: toastIn 0.3s ease forwards;
+            white-space: nowrap;
+        }
+        .toast.success { border-color: rgba(46, 204, 113, 0.5); color: #6ee7b7; }
+        .toast.warning { border-color: rgba(247, 168, 0, 0.5); color: var(--accent-orange); }
+        .toast.error { border-color: rgba(231, 76, 60, 0.5); color: #fca5a5; }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+    
+    <script>
+        function registerServiceWorker() {
+            if (!('serviceWorker' in navigator)) return;
+            if (location.protocol === 'file:') return;
+            navigator.serviceWorker.register('sw.js', { scope: './' })
+                .then(() => navigator.serviceWorker.addEventListener('message', handleSWMessage))
+                .catch(() => {});
+        }
+
+        function handleSWMessage(event) {
+            const { type, done, total, count } = event.data;
+            if (type === 'CACHE_PROGRESS') {
+                const pct = Math.round((done / total) * 100);
+                const prog = document.getElementById('cacheProgressBar');
+                const label = document.getElementById('cacheProgressLabel');
+                if (prog) prog.style.width = pct + '%';
+                if (label) label.textContent = `Caching tiles… ${done} / ${total} (${pct}%)`;
+            }
+            if (type === 'CACHE_DONE') {
+                showToast(`✅ ${total} tiles cached for offline use`, 'success');
+                hideCacheProgress();
+                updateTileCacheCount();
+            }
+            if (type === 'TILE_CACHE_CLEARED') {
+                showToast('🗑 Tile cache cleared', 'warning');
+                updateTileCacheCount();
+            }
+            if (type === 'TILE_CACHE_SIZE_RESULT') {
+                const el = document.getElementById('tileCacheCount');
+                if (el) el.textContent = `${count} tiles cached`;
+            }
+        }
+
+        registerServiceWorker();
+
+        let _pwaInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', e => {
+            e.preventDefault();
+            _pwaInstallPrompt = e;
+            const btn = document.getElementById('pwaInstallBtn');
+            if (btn) btn.style.display = 'flex';
+        });
+        window.addEventListener('appinstalled', () => {
+            _pwaInstallPrompt = null;
+            const btn = document.getElementById('pwaInstallBtn');
+            if (btn) btn.style.display = 'none';
+            showToast('✅ App installed!', 'success');
+        });
+        window.triggerPWAInstall = function() {
+            if (_pwaInstallPrompt) { _pwaInstallPrompt.prompt(); }
+            else { showToast('Open in Chrome/Edge and use the address bar install icon', 'warning', 5000); }
+        };
+    </script>
+    
+    <script>
+        
+        
+        
+        const DB_NAME = 'FieldLogMapDB';
+        const DB_VERSION = 3;
+        let db = null;
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, DB_VERSION);
+                req.onupgradeneeded = e => {
+                    const database = e.target.result;
+                    if (!database.objectStoreNames.contains('markups')) {
+                        database.createObjectStore('markups', { keyPath: 'id', autoIncrement: true });
+                    }
+                    if (!database.objectStoreNames.contains('layers')) {
+                        database.createObjectStore('layers', { keyPath: 'id' });
+                    }
+                    if (!database.objectStoreNames.contains('csvLayers')) {
+                        database.createObjectStore('csvLayers', { keyPath: 'filename' });
+                    }
+                    if (!database.objectStoreNames.contains('settings')) {
+                        database.createObjectStore('settings', { keyPath: 'key' });
+                    }
+                };
+                req.onsuccess = e => { db = e.target.result; resolve(db); };
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbSave(storeName, data) {
+            if (!db) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                const req = store.put(data);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbGetAll(storeName) {
+            if (!db) return Promise.resolve([]);
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const req = store.getAll();
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function dbClear(storeName) {
+            if (!db) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, 'readwrite');
+                tx.objectStore(storeName).clear();
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        function dbDelete(storeName, key) {
+            if (!db) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(storeName, 'readwrite');
+                const req = tx.objectStore(storeName).delete(key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function saveMarkupsToDB(markupSource) {
+            if (!db) return;
+            await dbClear('markups');
+            const features = markupSource.getFeatures();
+            for (const f of features) {
+                const geom = f.getGeometry();
+                const style = f.getStyle();
+                let color = currentMarkupColor;
+                try {
+                    const geomType = geom.getType();
+                    if (geomType === 'LineString') {
+                        
+                        if (style && style.getStroke && style.getStroke()) {
+                            const sc = style.getStroke().getColor();
+                            if (sc) color = sc;
+                        }
+                    } else {
+                        
+                        if (style && style.getImage && style.getImage()) {
+                            const fill = style.getImage().getFill();
+                            if (fill) color = fill.getColor();
+                        }
+                    }
+                } catch(e) {}
+                await dbSave('markups', {
+                    type: geom.getType(),
+                    coords: geom.getCoordinates(),
+                    color: color,
+                    origin: f.get('origin') || 'new',
+                    ts: f.get('ts') || new Date().toISOString()
+                });
+            }
+        }
+
+        async function loadMarkupsFromDB(markupSource) {
+            if (!db) return 0;
+            const rows = await dbGetAll('markups');
+            rows.forEach(row => {
+                let geom;
+                try {
+                    if (row.type === 'Point') geom = new ol.geom.Point(row.coords);
+                    else if (row.type === 'LineString') geom = new ol.geom.LineString(row.coords);
+                    else return;
+                } catch(e) { return; }
+                const feat = new ol.Feature({ geometry: geom, origin: row.origin, ts: row.ts });
+                feat.setStyle(createMarkupStyle(row.color));
+                markupSource.addFeature(feat);
+            });
+            return rows.length;
+        }
+    </script>
+</head>
+<body>
+
+    
+    <div id="toastContainer"></div>
+
+    
+    <div id="topToolbar">
+        
+        <button id="gpsStartButton" onclick="toggleGpsTracking()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:5px;"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="9" stroke-opacity="0.35"/></svg>
+            <span id="gpsLabel">GPS</span>
+        </button>
+
+        
+        <button id="toggleImportButton" class="panel-toggle-button" onclick="togglePanel('Import')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Import
+        </button>
+        
+        <button id="toggleLayerManagerButton" class="panel-toggle-button" onclick="togglePanel('Manager')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+            Layers
+        </button>
+        
+        <button id="toggleMarkupButton" class="panel-toggle-button" onclick="togglePanel('Markup')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Markup
+        </button>
+        
+        <button id="toggleOfflineButton" class="panel-toggle-button" onclick="togglePanel('Offline')" style="background:#1e3a5f; color:#7dd3fc;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            Cache
+        </button>
+        <button id="toggleSettingsButton" class="panel-toggle-button" onclick="togglePanel('Settings')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;margin-right:4px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+        </button>
+        <button id="pwaInstallBtn" onclick="triggerPWAInstall()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Install App
+        </button>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="locationIndicator" class="location-indicator" style="background:#475569;">
+        GPS Disabled. <span id="offlineBadge">OFFLINE</span>
+    </div>
+
+    <button id="zoomToMeButton" onclick="zoomToDeviceLocation()" title="Zoom to my location">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+        Zoom to Me
+    </button>
+
+    <button id="recenterButton" class="recenter-button" onclick="recenterGPS()">
+        🎯 Recenter
+    </button>
+
+    
+    <div id="quickDrawBar">
+
+        
+        <button class="qdb-btn" id="qdb-None" onclick="setDrawTool('None')" data-tip="Cancel / select mode">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <button class="qdb-btn" id="qdb-Point" onclick="setDrawTool('Point')" data-tip="Place a point marker">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4"/><path d="M12 10 L12 22" stroke="currentColor" stroke-width="2.2" fill="none"/></svg>
+        </button>
+        <button class="qdb-btn" id="qdb-LineString" onclick="setDrawTool('LineString')" data-tip="Draw line (click vertices, double-click to finish)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3,18 8,8 15,13 21,5"/><circle cx="3" cy="18" r="2" fill="currentColor" stroke="none"/><circle cx="21" cy="5" r="2" fill="currentColor" stroke="none"/></svg>
+        </button>
+        <button class="qdb-btn" id="qdb-FreehandLine" onclick="setDrawTool('FreehandLine')" data-tip="Freehand — click and drag">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 17 C6 10, 9 15, 12 10 S17 4, 21 8"/></svg>
+        </button>
+
+        <div class="qdb-sep" id="qdb-colorsep"></div>
+
+        <button class="qdb-btn" id="qdb-Undo" onclick="undoLastMarkup()" data-tip="Undo last markup (Ctrl+Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9,14 4,9 9,4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
+        </button>
+        <button class="qdb-btn" id="qdb-Erase" onclick="setDrawTool('Erase')" data-tip="Erase nearest markup (tap to delete, drag to pan)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20H7L3 16l10-10 7 7-3.5 3.5"/><path d="M6.5 17.5l4-4"/></svg>
+        </button>
+
+        <div class="qdb-sep" id="qdb-colorsep"></div>
+
+        
+        <div id="qdb-colors">
+            <div style="display:flex; flex-direction:column; gap:4px; align-items:center;">
+                <div class="qdb-swatch" style="background:#e74c3c;" data-tip="Red"    onclick="setMarkupColorAll('#e74c3c', this)"></div>
+                <div class="qdb-swatch" style="background:#f7a800;" data-tip="Amber"  onclick="setMarkupColorAll('#f7a800', this)"></div>
+                <div class="qdb-swatch" style="background:#2ecc71;" data-tip="Green"  onclick="setMarkupColorAll('#2ecc71', this)"></div>
+                <div class="qdb-swatch" style="background:#3b9eff;" data-tip="Blue"   onclick="setMarkupColorAll('#3b9eff', this)"></div>
+                <div class="qdb-swatch" style="background:#9b59b6;" data-tip="Purple" onclick="setMarkupColorAll('#9b59b6', this)"></div>
+                <input type="color" id="qdb-colorPicker" value="#f7a800" data-tip="Custom colour"
+                       onchange="setMarkupColorAll(this.value, null)" title="">
+            </div>
+        </div>
+
+    </div>
+
+    <div id="layerSwitcher">
+        <div id="lsMenu"></div>
+        <button id="lsBurger" onclick="toggleLayerSwitcherMenu()" title="Basemap">
+            <span></span><span></span><span></span>
+        </button>
+        
+        <div id="quickLayerBar" style="display:none;">
+            <div class="qlb-section-label">Layers</div>
+            <button class="qlb-btn type-drilled" id="qlb-DRILLED" onclick="quickLayerToggle('DRILLED')" title="Toggle all DRILLED layers">Drilled</button>
+            <button class="qlb-btn type-hole"    id="qlb-HOLE"    onclick="quickLayerToggle('HOLE')"    title="Toggle all HOLE layers">Hole</button>
+            <button class="qlb-btn type-log"     id="qlb-LOG"     onclick="quickLayerToggle('LOG')"     title="Toggle all LOG layers">Log</button>
+            <button class="qlb-btn type-samp"    id="qlb-SAMP"    onclick="quickLayerToggle('SAMP')"    title="Toggle all SAMP layers">Samp</button>
+            <button class="qlb-btn type-markup"  id="qlb-MARKUP"  onclick="quickLayerToggle('MARKUP')"  title="Toggle markup layers">Markup</button>
+        </div>
+    </div>
+
+    
+    <div id="cacheProgress">
+        <div id="cacheProgressLabel">Preparing tile cache…</div>
+        <div style="background:rgba(255,255,255,0.1); border-radius:2px; margin-top:8px;">
+            <div id="cacheProgressBar" style="height:4px; background:var(--accent-blue); border-radius:2px; width:0%; transition:width 0.2s;"></div>
+        </div>
+    </div>
+
+    
+    <div id="importPanel" class="widget-panel">
+        <div class="panel-header">
+            <h3>📂 Import Data</h3>
+            <p>Load CSV files to display on the map</p>
+        </div>
+        <div class="panel-body">
+            <div id="offlineStorageBar">
+                ⚠️ <strong>Offline mode</strong> — loaded data will be saved locally and persists when you reconnect.
+            </div>
+
+            
+            <div class="panel-section">
+                <h4>Load Folder</h4>
+                <input type="file" id="quickFolderPicker" webkitdirectory multiple accept=".csv"
+                    onchange="handleQuickFolderLoad(event)"
+                    style="display:none;">
+                <button onclick="document.getElementById('quickFolderPicker').click()"
+                    style="width:100%; padding:10px; background:linear-gradient(135deg,#0f4c81,#1d6fd8); color:#fff; border:none; border-radius:var(--radius); font-weight:700; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9,14 12,17 15,14"/></svg>
+                    Browse Folder
+                </button>
+                <div id="quickFolderStatus" style="font-size:10px; color:var(--text-muted); margin-top:6px; font-family:var(--font-mono); line-height:1.7;"></div>
+            </div>
+
+            <hr>
+
+            
+            <div class="panel-section">
+                <h4>Load CSV Files</h4>
+                <input type="file" id="csvFile" accept=".csv" multiple onchange="handleCSVUpload(event)"
+                    style="background:transparent; border:1px dashed var(--border); color:var(--text-muted); padding:8px; cursor:pointer; width:100%; border-radius:var(--radius);">
+                <div id="fileStatus" class="file-status" style="display:none;"></div>
+                
+                <input type="file" id="dirPicker" webkitdirectory multiple accept=".csv" onchange="handleDirectoryLoad(event)" style="display:none;">
+                <div id="autoLoadStatus" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="layerManager" class="widget-panel">
+        <div class="panel-header">
+            <h3>⚙️ Layer Management</h3>
+            <p>Control visibility of loaded datasets</p>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                    <h4 style="margin:0;">Loaded Layers</h4>
+                    <div style="display:flex; gap:5px;">
+                        <button onclick="clearLayerDB()" title="Clear all CSV layers from device storage" style="font-size:10px; font-weight:700; background:rgba(120,53,15,0.5); border:1px solid rgba(253,186,116,0.25); color:#fdba74; padding:4px 10px; border-radius:4px; cursor:pointer; white-space:nowrap;">🗑 Clear DB</button>
+                        <button onclick="removeAllLayers()" style="font-size:10px; font-weight:700; background:rgba(127,29,29,0.5); border:1px solid rgba(252,165,165,0.2); color:#fca5a5; padding:4px 10px; border-radius:4px; cursor:pointer; white-space:nowrap;">Remove All</button>
+                    </div>
+                </div>
+                <div id="layerList">
+                    <p style="font-size:11px; color:var(--text-muted);">Loading…</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="markupPanel" class="widget-panel">
+        <div class="panel-header">
+            <h3>📝 Field Markup</h3>
+            <p>Draw, edit and export field annotations</p>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                    <h4 style="margin:0;">Map Quick-Tools</h4>
+                    <button onclick="toggleQuickBar()" id="quickBarToggleBtn"
+                        style="font-size:10px; font-weight:700; background:rgba(255,255,255,0.06); border:1px solid var(--border); color:var(--text-muted); padding:3px 9px; border-radius:4px; cursor:pointer;">
+                        Hide
+                    </button>
+                </div>
+                <p style="font-size:10px; color:var(--text-muted); margin:0 0 6px;">
+                    Tools &amp; colours shown on the left side of the map. Click any tool or colour there, or use the panel below.
+                </p>
+            </div>
+
+            <div class="panel-section">
+                <h4>Colour</h4>
+                <div class="color-palette">
+                    <div class="color-swatch" style="background:#e74c3c;" title="Red"    onclick="setMarkupColorAll('#e74c3c', this)"></div>
+                    <div class="color-swatch" style="background:#f7a800;" title="Amber"  onclick="setMarkupColorAll('#f7a800', this)"></div>
+                    <div class="color-swatch" style="background:#2ecc71;" title="Green"  onclick="setMarkupColorAll('#2ecc71', this)"></div>
+                    <div class="color-swatch" style="background:#3b9eff;" title="Blue"   onclick="setMarkupColorAll('#3b9eff', this)"></div>
+                    <div class="color-swatch" style="background:#9b59b6;" title="Purple" onclick="setMarkupColorAll('#9b59b6', this)"></div>
+                    <input type="color" id="customColorPicker" value="#f7a800"
+                           onchange="setMarkupColorAll(this.value, null)"
+                           style="width:30px; height:30px; padding:0; cursor:pointer; border:none; background:none; border-radius:50%;">
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h4>Draw Tool</h4>
+                <div style="display:flex; gap:6px; margin-bottom:8px;">
+                    <button class="action-button" id="drawBtn-None" style="background:#1e293b; border:1px solid var(--border); flex:0 0 auto; width:auto; padding:8px 10px;" 
+                        onclick="setDrawTool('None')" title="Cancel / Select mode">🚫</button>
+                    <button class="action-button" id="drawBtn-Point" style="background:#1e293b; border:1px solid var(--border); flex:1; padding:8px 6px; font-size:11px;" 
+                        onclick="setDrawTool('Point')" title="Mark point">📍 Point</button>
+                    <button class="action-button" id="drawBtn-LineString" style="background:#1e293b; border:1px solid var(--border); flex:1; padding:8px 6px; font-size:11px;" 
+                        onclick="setDrawTool('LineString')" title="Draw line">📏 Line</button>
+                    <button class="action-button" id="drawBtn-FreehandLine" style="background:#1e293b; border:1px solid var(--border); flex:1; padding:8px 6px; font-size:11px;" 
+                        onclick="setDrawTool('FreehandLine')" title="Freehand">✏️ Free</button>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h4>Edit</h4>
+                <button class="action-button" style="background:#334155; border:1px solid var(--border);" onclick="undoLastMarkup()">↩ Undo Last Markup</button>
+                <button class="action-button" style="background:#7f1d1d;" onclick="deleteSelectedFeatures()">🗑 Delete Selected Feature</button>
+                <button class="action-button" style="background:#1e293b; border:1px solid var(--border);" onclick="clearAllMarkups()">🧹 Clear ALL Markups</button>
+            </div>
+
+            <div class="panel-section">
+                <h4>Export</h4>
+                <label for="exportFilename">Base Filename</label>
+                <input type="text" id="exportFilename" value="FIELD_MARKUPS">
+                <label for="exportFilter">Markups to Export</label>
+                <select id="exportFilter" style="background:#1e293b; border:1px solid var(--border); border-radius:var(--radius); color:var(--text-primary); padding:7px 10px; width:100%; font-size:12px; margin-bottom:8px;">
+                    <option value="new">Only NEW (this session)</option>
+                    <option value="all">ALL Markups</option>
+                </select>
+                <button class="action-button action-export" onclick="exportMarkupCSV()">
+                    ⬇️ Export Points (CSV)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="offlinePanel" class="widget-panel">
+        <div class="panel-header">
+            <h3>🗺 Tile Cache</h3>
+            <p>Cache map tiles for use without connectivity</p>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <h4>Connection Status</h4>
+                <div id="connectionStatusCard" style="border-radius:var(--radius); padding:10px 12px; font-size:12px; margin-bottom:12px;">
+                    Checking…
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h4>Tile Cache</h4>
+                <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">
+                    Cache tiles for the current map view at all visible zoom levels so you can use the map offline.
+                </p>
+                <div id="tileCacheCount" style="font-size:11px; color:var(--accent-blue); margin-bottom:8px;">Checking cache…</div>
+                <button id="cacheAreaBtn" onclick="cacheCurrentView()">
+                    🗺 Cache Current View (Zooms 10–17)
+                </button>
+                <button id="clearCacheBtn" onclick="clearTileCache()" style="background:transparent; border:1px solid var(--border); color:var(--accent-red); padding:7px 12px; border-radius:var(--radius); font-size:11px; font-weight:600; cursor:pointer; width:100%;">
+                    🗑 Clear Tile Cache
+                </button>
+            </div>
+
+            <div class="panel-section">
+                <h4>Markup Auto-Save</h4>
+                <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">
+                    All markups are automatically saved to your device and restored on reload — even without a connection.
+                </p>
+                <div id="savedMarkupsCount" style="font-size:11px; color:var(--accent-green);">—</div>
+                <button onclick="forceSaveMarkups()" style="background:transparent; border:1px solid rgba(46,204,113,0.4); color:var(--accent-green); padding:7px 12px; border-radius:var(--radius); font-size:11px; font-weight:600; cursor:pointer; width:100%; margin-top:8px;">
+                    💾 Save Markups Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settingsPanel" class="widget-panel">
+        <div class="panel-header">
+            <h3>⚙️ Settings</h3>
+            <p>Configure map, projection, CSV types &amp; GPS</p>
+        </div>
+        <div class="panel-body">
+
+            <div class="panel-section">
+                <h4>Map Start Position</h4>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+                    <div>
+                        <label style="margin-bottom:2px;">Longitude</label>
+                        <input type="number" id="settingsStartLon" step="0.0001" placeholder="0" style="margin-bottom:0;" />
+                    </div>
+                    <div>
+                        <label style="margin-bottom:2px;">Latitude</label>
+                        <input type="number" id="settingsStartLat" step="0.0001" placeholder="0" style="margin-bottom:0;" />
+                    </div>
+                    <div>
+                        <label style="margin-bottom:2px;">Zoom</label>
+                        <input type="number" id="settingsStartZoom" min="1" max="22" step="1" placeholder="4" style="margin-bottom:0;" />
+                    </div>
+                </div>
+                <p style="font-size:10px;color:var(--text-muted);margin:6px 0 0;line-height:1.5;">Tip: navigate to your area of interest on the map, note the coordinates, then set them here.</p>
+            </div>
+
+            <div class="panel-section">
+                <h4>Projection</h4>
+                <label>EPSG Code</label>
+                <input type="text" id="settingsProjCode" placeholder="e.g. EPSG:4326" />
+                <label>proj4 Definition String</label>
+                <input type="text" id="settingsProj4" placeholder="e.g. +proj=utm +zone=50 +south …" />
+                <p style="font-size:10px;color:var(--text-muted);margin:-2px 0 0;line-height:1.5;">Find proj4 strings at <strong style="color:var(--text-primary);">epsg.io</strong> — search your EPSG code and copy the proj4 export.</p>
+            </div>
+
+            <div class="panel-section">
+                <h4>CSV Column Headers</h4>
+                <label>Drill data Easting column</label>
+                <input type="text" id="settingsECol" placeholder="e.g. Longitude" />
+                <label>Drill data Northing column</label>
+                <input type="text" id="settingsNCol" placeholder="e.g. Latitude" />
+                <label>Label column (used for point labels)</label>
+                <input type="text" id="settingsHoleId" placeholder="Column header for point labels" />
+                <label>Markup export Easting column</label>
+                <input type="text" id="settingsMarkupE" placeholder="e.g. Longitude" />
+                <label>Markup export Northing column</label>
+                <input type="text" id="settingsMarkupN" placeholder="e.g. Latitude" />
+            </div>
+
+            <div class="panel-section">
+                <h4>GPS</h4>
+                <label>Accuracy threshold (m) — warn if worse than this</label>
+                <input type="number" id="settingsGpsAcc" min="1" max="500" step="1" placeholder="15" />
+            </div>
+
+            <div class="panel-section">
+                <h4>Display</h4>
+                <label>Label size (px)</label>
+                <input type="number" id="settingsLabelSize" min="6" max="32" step="1" placeholder="12" />
+                <label>Marker tap tolerance (px) — how much you can move before a tap becomes a pan</label>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <input type="range" id="settingsTapSlop" min="2" max="40" step="1" style="flex:1;margin-bottom:0;" oninput="document.getElementById('settingsTapSlopVal').textContent=this.value+'px'">
+                    <span id="settingsTapSlopVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
+                </div>
+                <p style="font-size:10px;color:var(--text-muted);margin:2px 0 10px;line-height:1.5;">Increase if markers are hard to place (try 16–24px on touch screens). Decrease if panning accidentally places markers.</p>
+                <label>Erase tool hit radius (px) — how close you must tap to erase a marker</label>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <input type="range" id="settingsEraseHit" min="10" max="80" step="2" style="flex:1;margin-bottom:0;" oninput="document.getElementById('settingsEraseHitVal').textContent=this.value+'px'">
+                    <span id="settingsEraseHitVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <h4 style="margin:0;">CSV Layer Types</h4>
+                    <button onclick="addLayerTypeSetting()" style="font-size:10px;font-weight:700;background:rgba(46,204,113,0.15);border:1px solid rgba(46,204,113,0.3);color:var(--accent-green);padding:4px 10px;border-radius:4px;cursor:pointer;">+ Add Type</button>
+                </div>
+                <p style="font-size:10px;color:var(--text-muted);margin:0 0 10px;line-height:1.6;">
+                    Each type is matched against the CSV filename (case-insensitive). <strong style="color:var(--text-primary);">Keyword</strong> = string to match in filename. <strong style="color:var(--text-primary);">Z-order</strong> = rendering priority (higher = drawn on top).
+                </p>
+                <div id="layerTypeSettingsList"></div>
+            </div>
+
+            <div class="panel-section">
+                <button class="action-button" style="background:#0369a1;margin-top:4px;" onclick="saveSettings()">💾 Save Settings</button>
+                <button class="action-button" style="background:#334155;border:1px solid var(--border);" onclick="resetSettingsToDefaults()">↺ Reset to Defaults</button>
+                <hr style="margin:10px 0;">
+                <h4 style="margin:0 0 8px;">Import / Export Settings File</h4>
+                <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;line-height:1.6;">Export your current settings to a <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px;">.json</code> file to back them up or share across devices. Import to restore.</p>
+                <button class="action-button" style="background:#0f766e;" onclick="exportSettingsFile()">⬇️ Export Settings File</button>
+                <label style="display:block;margin-bottom:0;">
+                    <div class="action-button" style="background:#334155;border:1px solid var(--border);cursor:pointer;text-align:center;">📂 Import Settings File</div>
+                    <input type="file" id="settingsFileInput" accept=".json" style="display:none;" onchange="importSettingsFile(event)">
+                </label>
+            </div>
+
+            <div class="panel-section">
+                <h4>GPS &amp; Location Permissions</h4>
+                <div class="gps-perm-info">
+                    <strong>Why does the browser keep asking?</strong><br>
+                    Browsers cannot grant permanent geolocation — it's a browser security boundary, not something this app controls. There is no SSL certificate workaround for a local HTML file.<br><br>
+                    <strong>To minimise prompts:</strong><br>
+                    1. Install as a PWA (use the <em>Install App</em> button in the toolbar) — installed PWAs remember permissions per-app.<br>
+                    2. On Android: open in Chrome → tap ⋮ → <em>Add to Home Screen</em>.<br>
+                    3. On desktop: open in Chrome/Edge → address bar install icon → <em>Install</em>.<br>
+                    4. After installing, tap the GPS button once and choose <em>Allow while using app</em> — the PWA shell remembers it.
+                </div>
+                <div id="gpsPerm" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Checking permission…</div>
+                <button onclick="checkGPSPermission()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:7px 12px;border-radius:var(--radius);font-size:11px;font-weight:600;cursor:pointer;width:100%;">🔍 Check GPS Permission Status</button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        
+        
+        
+        let MGA94_ZONE_50_CODE = 'EPSG:4326';
+        let MGA94_ZONE_50_PROJ4 = '+proj=longlat +datum=WGS84 +no_defs +type=crs';
+        ol.proj.proj4.register(proj4);
+
+        const WGS84_WEB_MERCATOR = 'EPSG:3857';
+
+        function getMarkupE() { return appSettings.markupEasting || 'Longitude'; }
+        function getMarkupN() { return appSettings.markupNorthing || 'Latitude'; }
+        function getMaxAccuracy() { return parseFloat(appSettings.gpsAccuracyThreshold) || 15; }
+        function getProjectionCode() { return appSettings.projectionCode || 'EPSG:4326'; }
+
+        function applyProjection() {
+            const code = appSettings.projectionCode || 'EPSG:4326';
+            const proj4str = appSettings.proj4String || '+proj=longlat +datum=WGS84 +no_defs +type=crs';
+            MGA94_ZONE_50_CODE = code;
+            MGA94_ZONE_50_PROJ4 = proj4str;
+            try { proj4.defs(code, proj4str); ol.proj.proj4.register(proj4); } catch(e) {}
+        }
+
+        const DEFAULT_LAYER_TYPES = [
+            { id: 'TYPE_1', keyword: '', color: '#3b9eff', opacity: 1, radius: 6, priority: 30, showLabel: false },
+        ];
+
+        let appSettings = {
+            layerTypes: JSON.parse(JSON.stringify(DEFAULT_LAYER_TYPES)),
+            coordinateE: 'Longitude',
+            coordinateN: 'Latitude',
+            holeIdKey: '',
+            markupEasting: 'Longitude',
+            markupNorthing: 'Latitude',
+            startLon: 0,
+            startLat: 0,
+            startZoom: 4,
+            projectionCode: 'EPSG:4326',
+            proj4String: '+proj=longlat +datum=WGS84 +no_defs +type=crs',
+            gpsAccuracyThreshold: 15,
+            holeLabelSize: 12,
+            tapSlop: 8,
+            eraseHitPx: 30,
+        };
+
+        function getCoordE() { return appSettings.coordinateE || 'Longitude'; }
+        function getCoordN() { return appSettings.coordinateN || 'Latitude'; }
+        function getHoleIdKey() { return appSettings.holeIdKey || ''; }
+
+        
+        
+        
+        let map;
+        let gpsSource = null;
+        let recenterInterval = null;
+        let isGpsActive = false;
+        let drawInteraction, selectInteraction, modifyInteraction;
+        let selectedFeatures;
+        let dragPanInteraction = null;
+        let currentMarkupColor = '#f7a800';
+        let currentHoleLabelSize = '12px';
+        let drillDataLayerGroup;
+        let markupAutoSaveTimer = null;
+        let watchId = null;
+        let isOnline = navigator.onLine;
+        let undoStack = [];           
+        let gpsFirstFix = true;       
+
+        
+        
+        
+        function showToast(msg, type = '', duration = 3000, extraClass = '') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = ['toast', type, extraClass].filter(Boolean).join(' ');
+            toast.textContent = msg;
+            container.appendChild(toast);
+            if (duration > 0) {
+                setTimeout(() => {
+                    toast.style.opacity = '0';
+                    toast.style.transition = 'opacity 0.3s';
+                    setTimeout(() => toast.remove(), 300);
+                }, duration);
+            }
+            return toast;
+        }
+
+        
+        
+        
+        
+        let _netStatusInitialized = false;
+
+        function updateNetworkStatus(online) {
+            isOnline = online;
+            const badge = document.getElementById('offlineBadge');
+            const offlineBar = document.getElementById('offlineStorageBar');
+
+            if (!online) {
+                showToast('No connection — offline mode', 'error', 0, 'toast-net'); 
+                badge.classList.add('show');
+                if (offlineBar) offlineBar.style.display = 'block';
+            } else {
+                
+                document.querySelectorAll('#toastContainer .toast-net').forEach(t => t.remove());
+                if (_netStatusInitialized) {
+                    
+                    showToast('Back online', 'success', 3500);
+                }
+                badge.classList.remove('show');
+                if (offlineBar) offlineBar.style.display = 'none';
+            }
+            _netStatusInitialized = true;
+            updateConnectionStatusCard();
+            updateTileCacheCount();
+        }
+
+        function updateConnectionStatusCard() {
+            const card = document.getElementById('connectionStatusCard');
+            if (!card) return;
+            if (isOnline) {
+                card.style.background = 'rgba(46,204,113,0.1)';
+                card.style.border = '1px solid rgba(46,204,113,0.3)';
+                card.style.color = '#6ee7b7';
+                card.innerHTML = '🟢 <strong>Online</strong> — Full map functionality available.';
+            } else {
+                card.style.background = 'rgba(231,76,60,0.1)';
+                card.style.border = '1px solid rgba(231,76,60,0.3)';
+                card.style.color = '#fca5a5';
+                card.innerHTML = '🔴 <strong>Offline</strong> — Using cached tiles. GPS still works. Markups saved locally.';
+            }
+        }
+
+        window.addEventListener('online', () => {
+            updateNetworkStatus(true);
+            showToast('✅ Connection restored', 'success');
+            if (map) map.getLayers().forEach(l => { if (l.getSource && l.getSource() && l.getSource().refresh) l.getSource().refresh(); });
+        });
+
+        window.addEventListener('offline', () => {
+            updateNetworkStatus(false);
+            showToast('📵 Gone offline — cached tiles active', 'warning');
+        });
+
+        
+        
+        
+        function createLayerStyle(typeCfg) {
+            const hex = typeCfg.color || '#ffffff';
+            const opacity = typeCfg.opacity !== undefined ? typeCfg.opacity : 1;
+            const radius = typeCfg.radius || 6;
+
+            function hexToRgba(h, a) {
+                const r = parseInt(h.slice(1,3),16), g = parseInt(h.slice(3,5),16), b = parseInt(h.slice(5,7),16);
+                return `rgba(${r},${g},${b},${a})`;
+            }
+            const fillColor   = hex.startsWith('#') ? hexToRgba(hex, opacity) : hex;
+            const strokeColor = hex.startsWith('#') ? hexToRgba(hex, Math.min(1, opacity + 0.3)) : 'white';
+
+            return function(feature) {
+                const styles = [new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius,
+                        fill: new ol.style.Fill({ color: fillColor }),
+                        stroke: new ol.style.Stroke({ color: 'white', width: radius > 6 ? 1.5 : 0.5, opacity: Math.min(1, opacity + 0.2) })
+                    })
+                })];
+                if (typeCfg.showLabel) {
+                    const holeId = feature.get('attributes') ? feature.get('attributes')[getHoleIdKey()] : null;
+                    if (holeId) {
+                        styles.push(new ol.style.Style({
+                            text: new ol.style.Text({
+                                text: String(holeId),
+                                font: `${currentHoleLabelSize} sans-serif`,
+                                fill: new ol.style.Fill({ color: 'black' }),
+                                stroke: new ol.style.Stroke({ color: 'white', width: 2 }),
+                                offsetX: 0, offsetY: radius + 7,
+                                textAlign: 'center', textBaseline: 'middle'
+                            })
+                        }));
+                    }
+                }
+                return styles;
+            };
+        }
+
+        window.updateHoleLabelSize = function(size) {
+            currentHoleLabelSize = `${size}px`;
+            appSettings.holeLabelSize = parseInt(size);
+            drillDataLayerGroup.getLayers().getArray().forEach(layer => {
+                const cfg = appSettings.layerTypes.find(t => t.showLabel && layer.get('dataType') === t.id);
+                if (cfg) layer.changed();
+            });
+        };
+
+        function createMarkupStyle(color) {
+            let baseColor = color || currentMarkupColor || '#f7a800';
+            let strokeColor = baseColor;
+            if (baseColor && baseColor.startsWith('#')) {
+                const r = parseInt(baseColor.slice(1, 3), 16);
+                const g = parseInt(baseColor.slice(3, 5), 16);
+                const b = parseInt(baseColor.slice(5, 7), 16);
+                strokeColor = `rgba(${r},${g},${b},0.9)`;
+            }
+            return new ol.style.Style({
+                image: new ol.style.Circle({
+                    radius: 10,
+                    fill: new ol.style.Fill({ color: strokeColor }),
+                    stroke: new ol.style.Stroke({ color: 'rgba(255,255,255,0.9)', width: 2 })
+                }),
+                stroke: new ol.style.Stroke({
+                    color: strokeColor,
+                    width: 4,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                })
+            });
+        }
+
+        window.setMarkupColor = function(color, swatchEl) { setMarkupColorAll(color, swatchEl); };
+
+        window.setMarkupColorAll = function(color, clickedEl) {
+            currentMarkupColor = color;
+            const hex = color.startsWith('#') ? color : '#f7a800';
+            
+            const picker1 = document.getElementById('customColorPicker');
+            const picker2 = document.getElementById('qdb-colorPicker');
+            if (picker1) picker1.value = hex;
+            if (picker2) picker2.value = hex;
+            
+            document.querySelectorAll('.color-swatch, .qdb-swatch').forEach(s => s.classList.remove('selected'));
+            if (clickedEl) clickedEl.classList.add('selected');
+        };
+
+        
+        
+        
+        async function initializeMap() {
+            await openDB().catch(() => {});
+            await loadSettings();
+
+            applyProjection();
+            currentHoleLabelSize = (appSettings.holeLabelSize || 12) + 'px';
+
+            
+            
+            
+            const greyCanvasSource = new ol.source.XYZ({
+                tileLoadFunction: function(tile) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 256; canvas.height = 256;
+                    const ctx = canvas.getContext('2d');
+                    
+                    ctx.fillStyle = '#d6d8db';
+                    ctx.fillRect(0, 0, 256, 256);
+                    
+                    ctx.strokeStyle = 'rgba(160,163,168,0.6)';
+                    ctx.lineWidth = 0.5;
+                    const step = 32;
+                    for (let i = 0; i <= 256; i += step) {
+                        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
+                    }
+                    
+                    ctx.strokeStyle = 'rgba(140,143,148,0.45)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(0, 0, 256, 256);
+                    tile.getImage().src = canvas.toDataURL();
+                },
+                url: '{z}/{x}/{y}'
+            });
+            const greyLayer = new ol.layer.Tile({
+                title: 'Grey Canvas', type: 'base',
+                source: greyCanvasSource, visible: true
+            });
+
+            const osmLayer = new ol.layer.Tile({
+                title: 'OSM Road', type: 'base',
+                source: new ol.source.OSM(), visible: false
+            });
+            const openTopoMapLayer = new ol.layer.Tile({
+                title: 'OpenTopoMap (Terrain)', type: 'base',
+                source: new ol.source.XYZ({
+                    url: 'https://a.tile.opentopomap.org/{z}/{x}/{y}.png',
+                    attributions: 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)'
+                }), visible: false
+            });
+            const esriSatelliteLayer = new ol.layer.Tile({
+                title: 'ESRI Satellite', type: 'base',
+                source: new ol.source.XYZ({
+                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                    attributions: 'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+                }), visible: false
+            });
+
+            const markupSource = new ol.source.Vector({ wrapX: false });
+            const markupLayer = new ol.layer.Vector({
+                title: 'Field Markups',
+                source: markupSource,
+                style: function(feature) {
+                    if (feature.getStyle()) return feature.getStyle();
+                    return createMarkupStyle(currentMarkupColor);
+                },
+                zIndex: 100
+            });
+
+            drillDataLayerGroup = new ol.layer.Group({ title: 'Drill Data', layers: [], zIndex: 30 });
+
+            map = new ol.Map({
+                target: 'map',
+                layers: [greyLayer, osmLayer, openTopoMapLayer, esriSatelliteLayer, drillDataLayerGroup, markupLayer],
+                view: new ol.View({ center: ol.proj.fromLonLat([appSettings.startLon || 0, appSettings.startLat || 0]), zoom: appSettings.startZoom || 4 })
+            });
+
+            map.getInteractions().forEach(interaction => {
+                if (interaction instanceof ol.interaction.DragPan) dragPanInteraction = interaction;
+            });
+
+            setupMarkupInteractions();
+            setupLayerSwitcher(map, [greyLayer, osmLayer, openTopoMapLayer, esriSatelliteLayer]);
+
+            
+            const loadedCount = await loadMarkupsFromDB(markupSource);
+            if (loadedCount > 0) {
+                showToast(`📂 Restored ${loadedCount} saved markups`, 'success');
+                updateSavedMarkupsCount();
+            }
+
+            
+            const restoredFeatures = await loadCSVLayersFromDB();
+            if (restoredFeatures > 0) {
+                showToast(`🗂 Restored ${restoredFeatures} features from saved layers`, 'success');
+            }
+
+            
+            markupSource.on('addfeature', () => scheduleMarkupSave(markupSource));
+            markupSource.on('removefeature', () => scheduleMarkupSave(markupSource));
+            markupSource.on('changefeature', () => scheduleMarkupSave(markupSource));
+
+            
+            updateNetworkStatus(navigator.onLine);
+            updateTileCacheCount();
+            updateUndoBtn();
+        }
+
+        function scheduleMarkupSave(markupSource) {
+            if (markupAutoSaveTimer) clearTimeout(markupAutoSaveTimer);
+            markupAutoSaveTimer = setTimeout(async () => {
+                await saveMarkupsToDB(markupSource);
+                updateSavedMarkupsCount();
+            }, 1000);
+        }
+
+        function updateSavedMarkupsCount() {
+            dbGetAll('markups').then(rows => {
+                const el = document.getElementById('savedMarkupsCount');
+                if (el) el.textContent = `${rows.length} markup(s) saved locally`;
+            }).catch(() => {});
+        }
+
+        window.forceSaveMarkups = async function() {
+            const markupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+            if (markupLayer) {
+                await saveMarkupsToDB(markupLayer.getSource());
+                updateSavedMarkupsCount();
+                showToast('💾 Markups saved to device', 'success');
+            }
+        };
+
+        
+        
+        
+        function getTileCacheSize() {
+            if (!navigator.serviceWorker.controller) return;
+            navigator.serviceWorker.controller.postMessage({ type: 'TILE_CACHE_SIZE' });
+        }
+
+        function updateTileCacheCount() {
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'TILE_CACHE_SIZE' });
+            } else {
+                const el = document.getElementById('tileCacheCount');
+                if (el) el.textContent = 'Cache not available (SW not active)';
+            }
+        }
+
+        window.cacheCurrentView = function() {
+            if (!navigator.serviceWorker.controller) {
+                showToast('⚠️ Service worker not ready. Try reloading.', 'warning');
+                return;
+            }
+            if (!navigator.onLine) {
+                showToast('⚠️ Cannot cache tiles — you are offline', 'error');
+                return;
+            }
+
+            const view = map.getView();
+            const extent = view.calculateExtent(map.getSize());
+            const baseLayer = map.getLayers().getArray().find(l => l.getVisible() && l.get('type') === 'base' && l.get('title') !== 'Grey Canvas');
+            
+            
+            let urlTemplate = 'https://{a-c}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+            if (baseLayer) {
+                const src = baseLayer.getSource();
+                if (src && src.getUrls) {
+                    const urls = src.getUrls();
+                    if (urls && urls[0]) urlTemplate = urls[0];
+                } else if (src && src.getUrl) {
+                    urlTemplate = src.getUrl() || urlTemplate;
+                }
+            }
+
+            const [minX, minY, maxX, maxY] = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
+            const MIN_ZOOM = 10, MAX_ZOOM = 17;
+            const tileUrls = [];
+
+            for (let z = MIN_ZOOM; z <= MAX_ZOOM; z++) {
+                const tileRange = getTileRange(minX, minY, maxX, maxY, z);
+                for (let x = tileRange.minX; x <= tileRange.maxX; x++) {
+                    for (let y = tileRange.minY; y <= tileRange.maxY; y++) {
+                        let url = urlTemplate
+                            .replace('{z}', z)
+                            .replace('{x}', x)
+                            .replace('{y}', y)
+                            .replace('{a-c}', ['a','b','c'][Math.floor(Math.random()*3)]);
+                        if (urlTemplate.includes('arcgisonline')) {
+                            url = urlTemplate.replace('{z}', z).replace('{y}', y).replace('{x}', x);
+                        }
+                        tileUrls.push(url);
+                    }
+                }
+            }
+
+            if (tileUrls.length > 5000) {
+                showToast(`⚠️ ${tileUrls.length} tiles — zoom in further to reduce`, 'warning');
+                return;
+            }
+
+            showCacheProgress();
+            navigator.serviceWorker.controller.postMessage({ type: 'CACHE_TILES', urls: tileUrls });
+            showToast(`⏳ Caching ${tileUrls.length} tiles…`, '', 2000);
+        };
+
+        function getTileRange(minLon, minLat, maxLon, maxLat, zoom) {
+            const toTileX = lon => Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
+            const toTileY = lat => Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+            return {
+                minX: toTileX(minLon),
+                maxX: toTileX(maxLon),
+                minY: toTileY(maxLat),
+                maxY: toTileY(minLat)
+            };
+        }
+
+        window.clearTileCache = function() {
+            if (!navigator.serviceWorker.controller) {
+                showToast('⚠️ Service worker not ready', 'warning');
+                return;
+            }
+            if (confirm('Clear all cached map tiles? You will need to re-cache them for offline use.')) {
+                navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_TILE_CACHE' });
+            }
+        };
+
+        function showCacheProgress() {
+            const el = document.getElementById('cacheProgress');
+            if (el) { el.style.display = 'block'; document.getElementById('cacheProgressBar').style.width = '0%'; }
+        }
+        function hideCacheProgress() {
+            setTimeout(() => {
+                const el = document.getElementById('cacheProgress');
+                if (el) el.style.display = 'none';
+            }, 1500);
+        }
+
+        
+        
+        
+        function setupMarkupInteractions() {
+            const markupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+            selectedFeatures = new ol.Collection();
+            selectInteraction = new ol.interaction.Select({
+                features: selectedFeatures,
+                layers: [markupLayer],
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: 'cyan', width: 3 }),
+                    fill: new ol.style.Fill({ color: 'rgba(0,255,255,0.4)' }),
+                    image: new ol.style.Circle({ radius: 12, fill: new ol.style.Fill({ color: 'cyan' }), stroke: new ol.style.Stroke({ color: 'white', width: 2 }) })
+                })
+            });
+            map.addInteraction(selectInteraction);
+            selectInteraction.setActive(false);
+
+            modifyInteraction = new ol.interaction.Modify({ features: selectedFeatures });
+            map.addInteraction(modifyInteraction);
+            modifyInteraction.setActive(false);
+        }
+
+        
+        
+        
+        function getTapSlop() { return appSettings.tapSlop ?? 8; }
+        function getEraseHitPx() { return appSettings.eraseHitPx ?? 30; }
+        let _tapPointerId = null, _tapStartX = 0, _tapStartY = 0, _tapMoved = false;
+        let _tapPointerDownHandler = null, _tapPointerMoveHandler = null, _tapPointerUpHandler = null;
+
+        function _removeTapPointHandlers() {
+            const canvas = map.getViewport().querySelector('canvas');
+            if (!canvas) return;
+            if (_tapPointerDownHandler) { canvas.removeEventListener('pointerdown', _tapPointerDownHandler); _tapPointerDownHandler = null; }
+            if (_tapPointerMoveHandler) { canvas.removeEventListener('pointermove', _tapPointerMoveHandler); _tapPointerMoveHandler = null; }
+            if (_tapPointerUpHandler)   { canvas.removeEventListener('pointerup',   _tapPointerUpHandler);   _tapPointerUpHandler = null; }
+        }
+
+        function _installTapPointHandlers(markupSource) {
+            _removeTapPointHandlers();
+            const canvas = map.getViewport().querySelector('canvas');
+            if (!canvas) return;
+
+            _tapPointerDownHandler = function(e) {
+                _tapPointerId = e.pointerId;
+                _tapStartX = e.clientX;
+                _tapStartY = e.clientY;
+                _tapMoved = false;
+            };
+
+            _tapPointerMoveHandler = function(e) {
+                if (e.pointerId !== _tapPointerId) return;
+                const dx = e.clientX - _tapStartX;
+                const dy = e.clientY - _tapStartY;
+                if (Math.sqrt(dx*dx + dy*dy) > getTapSlop()) _tapMoved = true;
+            };
+
+            _tapPointerUpHandler = function(e) {
+                if (e.pointerId !== _tapPointerId) return;
+                _tapPointerId = null;
+                if (_tapMoved) return; 
+
+                
+                const rect = canvas.getBoundingClientRect();
+                const pixel = [e.clientX - rect.left, e.clientY - rect.top];
+                const coord = map.getCoordinateFromPixel(pixel);
+                if (!coord) return;
+
+                const feature = new ol.Feature({
+                    geometry: new ol.geom.Point(coord),
+                    origin: 'new',
+                    ts: new Date().toISOString()
+                });
+                feature.setStyle(createMarkupStyle(currentMarkupColor));
+                markupSource.addFeature(feature);
+                undoStack.push({ feature, source: markupSource });
+                updateUndoBtn();
+            };
+
+            canvas.addEventListener('pointerdown', _tapPointerDownHandler);
+            canvas.addEventListener('pointermove', _tapPointerMoveHandler);
+            canvas.addEventListener('pointerup',   _tapPointerUpHandler);
+        }
+
+        
+        
+        let _erasePointerId = null, _eraseStartX = 0, _eraseStartY = 0, _eraseMoved = false;
+        let _erasePointerDownHandler = null, _erasePointerMoveHandler = null, _erasePointerUpHandler = null;
+
+        function _removeEraseHandlers() {
+            const canvas = map.getViewport() && map.getViewport().querySelector('canvas');
+            if (!canvas) return;
+            if (_erasePointerDownHandler) { canvas.removeEventListener('pointerdown', _erasePointerDownHandler); _erasePointerDownHandler = null; }
+            if (_erasePointerMoveHandler) { canvas.removeEventListener('pointermove', _erasePointerMoveHandler); _erasePointerMoveHandler = null; }
+            if (_erasePointerUpHandler)   { canvas.removeEventListener('pointerup',   _erasePointerUpHandler);   _erasePointerUpHandler = null; }
+        }
+
+        function _installEraseHandlers() {
+            _removeEraseHandlers();
+            const canvas = map.getViewport().querySelector('canvas');
+            if (!canvas) return;
+
+            _erasePointerDownHandler = function(e) {
+                _erasePointerId = e.pointerId;
+                _eraseStartX = e.clientX;
+                _eraseStartY = e.clientY;
+                _eraseMoved = false;
+            };
+            _erasePointerMoveHandler = function(e) {
+                if (e.pointerId !== _erasePointerId) return;
+                const dx = e.clientX - _eraseStartX, dy = e.clientY - _eraseStartY;
+                if (Math.sqrt(dx*dx + dy*dy) > getTapSlop()) _eraseMoved = true;
+            };
+            _erasePointerUpHandler = function(e) {
+                if (e.pointerId !== _erasePointerId) return;
+                _erasePointerId = null;
+                if (_eraseMoved) return; 
+
+                const rect = canvas.getBoundingClientRect();
+                const tapPixel = [e.clientX - rect.left, e.clientY - rect.top];
+                const tapCoord = map.getCoordinateFromPixel(tapPixel);
+                if (!tapCoord) return;
+
+                
+                const markupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+                if (!markupLayer) return;
+                const source = markupLayer.getSource();
+                const features = source.getFeatures();
+                if (!features.length) { showToast('No markups to erase', 'warning'); return; }
+
+                let nearest = null, nearestDistPx = Infinity;
+                features.forEach(f => {
+                    const geom = f.getGeometry();
+                    
+                    const closestCoord = geom.getClosestPoint ? geom.getClosestPoint(tapCoord) : geom.getCoordinates();
+                    const closestPixel = map.getPixelFromCoordinate(closestCoord);
+                    if (!closestPixel) return;
+                    const dx = closestPixel[0] - tapPixel[0], dy = closestPixel[1] - tapPixel[1];
+                    const distPx = Math.sqrt(dx*dx + dy*dy);
+                    if (distPx < nearestDistPx) { nearestDistPx = distPx; nearest = f; }
+                });
+
+                if (!nearest || nearestDistPx > getEraseHitPx()) {
+                    showToast('Nothing close enough to erase', 'warning');
+                    return;
+                }
+
+                source.removeFeature(nearest);
+                showToast('🧹 Markup erased', '');
+            };
+
+            canvas.addEventListener('pointerdown', _erasePointerDownHandler);
+            canvas.addEventListener('pointermove', _erasePointerMoveHandler);
+            canvas.addEventListener('pointerup',   _erasePointerUpHandler);
+        }
+
+        function addDrawInteraction(type) {
+            if (drawInteraction) { map.removeInteraction(drawInteraction); drawInteraction = null; }
+            _removeTapPointHandlers();
+            _removeEraseHandlers();
+            selectInteraction.setActive(false);
+            modifyInteraction.setActive(false);
+            selectedFeatures.clear();
+
+            const isFreehand = type === 'FreehandLine';
+            
+            if (dragPanInteraction) dragPanInteraction.setActive(!isFreehand);
+
+            if (type === 'Point') {
+                
+                const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
+                _installTapPointHandlers(markupSource);
+
+            } else if (type === 'Erase') {
+                
+                _installEraseHandlers();
+
+            } else if (type !== 'None') {
+                const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
+                let drawType = type;
+                let freehandMode = false;
+                if (type === 'FreehandLine') { drawType = 'LineString'; freehandMode = true; }
+
+                drawInteraction = new ol.interaction.Draw({
+                    source: markupSource, type: drawType,
+                    style: createMarkupStyle(currentMarkupColor), freehand: freehandMode
+                });
+                map.addInteraction(drawInteraction);
+                drawInteraction.on('drawend', function(event) {
+                    event.feature.set('origin', 'new');
+                    event.feature.set('ts', new Date().toISOString());
+                    event.feature.setStyle(createMarkupStyle(currentMarkupColor));
+                    undoStack.push({ feature: event.feature, source: markupSource });
+                    updateUndoBtn();
+                    selectInteraction.setActive(true);
+                    modifyInteraction.setActive(true);
+                    if (dragPanInteraction) dragPanInteraction.setActive(true);
+                });
+            } else {
+                selectInteraction.setActive(true);
+                modifyInteraction.setActive(true);
+                if (dragPanInteraction) dragPanInteraction.setActive(true);
+            }
+        }
+
+        
+        const TOOL_META = {
+            'None':         { icon: '✕',  label: 'Select' },
+            'Point':        { icon: '📍', label: 'Point' },
+            'LineString':   { icon: '📏', label: 'Line' },
+            'FreehandLine': { icon: '✏️', label: 'Freehand' },
+            'Erase':        { icon: '🧹', label: 'Erase' },
+        };
+
+        function updateActiveToolPill(type) {}
+
+        function populateSettingsPanel() {
+            document.getElementById('settingsStartLon').value  = appSettings.startLon  ?? 0;
+            document.getElementById('settingsStartLat').value  = appSettings.startLat  ?? 0;
+            document.getElementById('settingsStartZoom').value = appSettings.startZoom ?? 4;
+            document.getElementById('settingsProjCode').value  = appSettings.projectionCode || 'EPSG:4326';
+            document.getElementById('settingsProj4').value     = appSettings.proj4String    || '';
+            document.getElementById('settingsECol').value      = appSettings.coordinateE    || 'Longitude';
+            document.getElementById('settingsNCol').value      = appSettings.coordinateN    || 'Latitude';
+            document.getElementById('settingsHoleId').value    = appSettings.holeIdKey      || '';
+            document.getElementById('settingsMarkupE').value   = appSettings.markupEasting  || 'Longitude';
+            document.getElementById('settingsMarkupN').value   = appSettings.markupNorthing || 'Latitude';
+            document.getElementById('settingsGpsAcc').value    = appSettings.gpsAccuracyThreshold ?? 15;
+            document.getElementById('settingsLabelSize').value = appSettings.holeLabelSize  ?? 12;
+            const tapSlop = appSettings.tapSlop ?? 8;
+            const eraseHit = appSettings.eraseHitPx ?? 30;
+            document.getElementById('settingsTapSlop').value = tapSlop;
+            document.getElementById('settingsTapSlopVal').textContent = tapSlop + 'px';
+            document.getElementById('settingsEraseHit').value = eraseHit;
+            document.getElementById('settingsEraseHitVal').textContent = eraseHit + 'px';
+            renderLayerTypeSettingsList();
+        }
+
+        window.exportSettingsFile = function() {
+            const exportData = {
+                _version: 1,
+                _exported: new Date().toISOString(),
+                startLon:  appSettings.startLon,
+                startLat:  appSettings.startLat,
+                startZoom: appSettings.startZoom,
+                projectionCode: appSettings.projectionCode,
+                proj4String:    appSettings.proj4String,
+                coordinateE:  appSettings.coordinateE,
+                coordinateN:  appSettings.coordinateN,
+                holeIdKey:    appSettings.holeIdKey,
+                markupEasting:  appSettings.markupEasting,
+                markupNorthing: appSettings.markupNorthing,
+                gpsAccuracyThreshold: appSettings.gpsAccuracyThreshold,
+                holeLabelSize: appSettings.holeLabelSize,
+                tapSlop:    appSettings.tapSlop,
+                eraseHitPx: appSettings.eraseHitPx,
+                layerTypes: appSettings.layerTypes,
+            };
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'field-map-settings.json';
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('⬇️ Settings file exported', 'success');
+        };
+
+        window.importSettingsFile = function(event) {
+            const file = event.target.files[0];
+            event.target.value = '';
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (!data || typeof data !== 'object') throw new Error('Invalid file');
+                    if (data.layerTypes && Array.isArray(data.layerTypes) && data.layerTypes.length) appSettings.layerTypes = data.layerTypes;
+                    if (data.coordinateE  !== undefined) appSettings.coordinateE  = data.coordinateE;
+                    if (data.coordinateN  !== undefined) appSettings.coordinateN  = data.coordinateN;
+                    if (data.holeIdKey    !== undefined) appSettings.holeIdKey    = data.holeIdKey;
+                    if (data.markupEasting  !== undefined) appSettings.markupEasting  = data.markupEasting;
+                    if (data.markupNorthing !== undefined) appSettings.markupNorthing = data.markupNorthing;
+                    if (data.startLon  !== undefined) appSettings.startLon  = data.startLon;
+                    if (data.startLat  !== undefined) appSettings.startLat  = data.startLat;
+                    if (data.startZoom !== undefined) appSettings.startZoom = data.startZoom;
+                    if (data.projectionCode !== undefined) appSettings.projectionCode = data.projectionCode;
+                    if (data.proj4String    !== undefined) appSettings.proj4String    = data.proj4String;
+                    if (data.gpsAccuracyThreshold !== undefined) appSettings.gpsAccuracyThreshold = data.gpsAccuracyThreshold;
+                    if (data.holeLabelSize !== undefined) appSettings.holeLabelSize = data.holeLabelSize;
+                    if (data.tapSlop    !== undefined) appSettings.tapSlop    = data.tapSlop;
+                    if (data.eraseHitPx !== undefined) appSettings.eraseHitPx = data.eraseHitPx;
+                    applyProjection();
+                    currentHoleLabelSize = appSettings.holeLabelSize + 'px';
+                    persistSettings();
+                    populateSettingsPanel();
+                    if (drillDataLayerGroup) {
+                        drillDataLayerGroup.getLayers().getArray().forEach(layer => {
+                            const typeCfg = appSettings.layerTypes.find(t => t.id === layer.get('dataType'));
+                            if (typeCfg) { layer.setStyle(createLayerStyle(typeCfg)); layer.setZIndex(typeCfg.priority); layer.changed(); }
+                        });
+                        updateQuickLayerBar();
+                        updateLayerListUI();
+                    }
+                    showToast('✅ Settings imported from file', 'success');
+                } catch(err) {
+                    showToast('❌ Invalid settings file', 'error');
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        function updateUndoBtn() {
+            const btn = document.getElementById('qdb-Undo');
+            if (!btn) return;
+            btn.style.opacity = undoStack.length > 0 ? '1' : '0.3';
+            btn.style.pointerEvents = undoStack.length > 0 ? 'auto' : 'none';
+        }
+
+        window.undoLastMarkup = function() {
+            if (!undoStack.length) { showToast('Nothing to undo', 'warning'); return; }
+            const { feature, source } = undoStack.pop();
+            source.removeFeature(feature);
+            updateUndoBtn();
+            showToast('↩ Undo', '');
+        };
+
+        
+        document.addEventListener('keydown', function(e) {
+            
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoLastMarkup(); return; }
+            if (e.key === 'Escape') { setDrawTool('None'); return; }
+            if (e.key === 'p' || e.key === 'P') { setDrawTool('Point'); return; }
+            if (e.key === 'l' || e.key === 'L') { setDrawTool('LineString'); return; }
+            if (e.key === 'f' || e.key === 'F') { setDrawTool('FreehandLine'); return; }
+            if (e.key === 'e' || e.key === 'E') { setDrawTool('Erase'); return; }
+        });
+
+        window.setDrawTool = function(type) {
+            
+            document.querySelectorAll('[id^="drawBtn-"]').forEach(b => {
+                b.style.background = '#1e293b';
+                b.style.borderColor = 'var(--border)';
+                b.style.color = 'var(--text-primary)';
+            });
+            
+            document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
+
+            const activePanel = document.getElementById('drawBtn-' + type);
+            if (activePanel) { activePanel.style.background = 'var(--accent-orange)'; activePanel.style.borderColor = 'var(--accent-orange)'; activePanel.style.color = '#000'; }
+            const activeQdb = document.getElementById('qdb-' + type);
+            if (activeQdb) activeQdb.classList.add('active');
+
+            updateActiveToolPill(type);
+            addDrawInteraction(type);
+        };
+
+        window.activateTool = function(toolName) {
+            if (drawInteraction) map.removeInteraction(drawInteraction);
+            selectedFeatures.clear();
+            document.querySelectorAll('[id^="drawBtn-"]').forEach(b => { b.style.background = '#1e293b'; b.style.borderColor = 'var(--border)'; b.style.color = 'var(--text-primary)'; });
+            document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
+            if (toolName === 'Modify') {
+                selectInteraction.setActive(true);
+                modifyInteraction.setActive(true);
+            } else if (toolName === 'Select') {
+                selectInteraction.setActive(true);
+                modifyInteraction.setActive(false);
+            }
+        };
+
+        
+        window.handleQuickFolderLoad = function(event) {
+            const files = Array.from(event.target.files).filter(f => f.name.toLowerCase().endsWith('.csv'));
+            const statusEl = document.getElementById('quickFolderStatus');
+            event.target.value = '';
+            if (!files.length) {
+                statusEl.innerHTML = '⚠️ No CSV files found in selected folder.';
+                return;
+            }
+            statusEl.innerHTML = `Found ${files.length} CSV(s) — loading…`;
+            handleCSVUploadFiles(files, statusEl);
+        };
+
+        
+        window.handleDirectoryLoad = function(event) {
+            const files = Array.from(event.target.files).filter(f => f.name.toLowerCase().endsWith('.csv'));
+            const statusEl = document.getElementById('autoLoadStatus');
+            if (!files.length) { statusEl.textContent = 'No CSV files found in selected folder.'; return; }
+            statusEl.textContent = `Found ${files.length} CSV(s) — loading…`;
+
+            
+            const fakeEvent = { target: { files } };
+            handleCSVUploadFiles(files, statusEl);
+        };
+
+        function handleCSVUploadFiles(files, statusEl) {
+            if (typeof Papa === 'undefined') { if (statusEl) statusEl.textContent = 'ERROR: CSV parser not available.'; return; }
+            let combinedFeatures = [], statusUpdates = [];
+
+            const processFile = file => new Promise(resolve => {
+                const filename = file.name;
+                const fnUp = filename.toUpperCase();
+
+                
+                const reader = new FileReader();
+                reader.onload = function(readerEvent) {
+                    const rawText = readerEvent.target.result;
+
+                    Papa.parse(rawText, {
+                        header: true, skipEmptyLines: true,
+                        complete(results) {
+                        const headers = results.meta.fields || [];
+                        
+                        const isMarkupFile = headers.includes('Color') &&
+                            (headers.includes(getMarkupE()) || headers.includes(getCoordE()) || headers.includes('Coords'));
+                        let targetLayer, dataType;
+
+                        if (isMarkupFile) {
+                            targetLayer = createImportedMarkupLayer(filename);
+                            dataType = 'MARKUP';
+                        } else {
+                            const matchedType = appSettings.layerTypes.find(t => fnUp.includes(t.keyword.toUpperCase()));
+                            if (!matchedType) { statusUpdates.push(`🚫 Skipped: ${filename}`); return resolve(); }
+                            dataType = matchedType.id;
+                            targetLayer = createDrillLayer(filename, dataType);
+                        }
+
+                        const targetSource = targetLayer.getSource();
+                        let validCount = 0;
+                        results.data.forEach(row => {
+                            if (isMarkupFile) {
+                                const rowType = (row.Type || 'Point').trim();
+
+                                if (rowType === 'LineString' && row.Coords) {
+                                    
+                                    try {
+                                        const rawCoords = (row.Coords || '').trim();
+                                        if (!rawCoords) return;
+                                        const mgaCoords = JSON.parse(rawCoords);
+                                        if (!Array.isArray(mgaCoords) || mgaCoords.length < 1) return;
+                                        const wmCoords = mgaCoords.map(c =>
+                                            ol.proj.transform([parseFloat(c[0]), parseFloat(c[1])], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR)
+                                        );
+                                        
+                                        if (wmCoords.length < 2) return;
+                                        const feature = new ol.Feature({
+                                            geometry: new ol.geom.LineString(wmCoords),
+                                            origin: row.Origin || 'imported',
+                                            ts: row.Timestamp || new Date().toISOString()
+                                        });
+                                        feature.setStyle(createMarkupStyle(row.Color || currentMarkupColor));
+                                        targetSource.addFeature(feature);
+                                        combinedFeatures.push(feature);
+                                        validCount++;
+                                    } catch(e) { console.warn('Line import error:', e, row.Coords && row.Coords.slice(0,60)); }
+
+                                } else {
+                                    
+                                    const E_key = row.hasOwnProperty(getMarkupE()) ? getMarkupE() : getCoordE();
+                                    const N_key = row.hasOwnProperty(getMarkupN()) ? getMarkupN() : getCoordN();
+                                    const E = row[E_key], N = row[N_key];
+                                    if (E && N && !isNaN(parseFloat(E)) && !isNaN(parseFloat(N))) {
+                                        const coords = ol.proj.transform([parseFloat(E), parseFloat(N)], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR);
+                                        const feature = new ol.Feature({
+                                            geometry: new ol.geom.Point(coords),
+                                            attributes: { ...row, filename },
+                                            origin: row.Origin || 'imported',
+                                            ts: row.Timestamp || new Date().toISOString()
+                                        });
+                                        if (row.Color) feature.setStyle(createMarkupStyle(row.Color));
+                                        targetSource.addFeature(feature);
+                                        combinedFeatures.push(feature);
+                                        validCount++;
+                                    }
+                                }
+                            } else {
+                                
+                                const E = row[getCoordE()], N = row[getCoordN()];
+                                if (E && N && !isNaN(parseFloat(E)) && !isNaN(parseFloat(N))) {
+                                    validCount++;
+                                    const coords = ol.proj.transform([parseFloat(E), parseFloat(N)], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR);
+                                    const feature = new ol.Feature({ geometry: new ol.geom.Point(coords), attributes: { ...row, filename }, origin: 'imported' });
+                                    targetSource.addFeature(feature);
+                                    combinedFeatures.push(feature);
+                                }
+                            }
+                        });
+                        statusUpdates.push(`✅ ${dataType}: ${filename} — ${validCount} feature(s) loaded`);
+
+                            
+                            dbSave('csvLayers', {
+                                filename,
+                                dataType,
+                                rawText,
+                                savedAt: Date.now()
+                            }).catch(() => {});
+
+                            resolve();
+                        },
+                        error(err) { statusUpdates.push(`❌ ${filename}: ${err.type}`); resolve(); }
+                    }); 
+                }; 
+                reader.readAsText(file);
+            });
+
+            Promise.all(files.map(processFile)).finally(() => {
+                const msg = statusUpdates.join('<br>');
+                if (statusEl) statusEl.innerHTML = msg;
+                const fsEl = document.getElementById('fileStatus');
+                if (fsEl) { fsEl.innerHTML = msg; fsEl.style.display = msg ? 'block' : 'none'; }
+                updateLayerListUI();
+                if (combinedFeatures.length > 0) {
+                    const extent = combinedFeatures[0].getGeometry().getExtent().slice();
+                    combinedFeatures.forEach(f => ol.extent.extend(extent, f.getGeometry().getExtent()));
+                    map.getView().fit(extent, { padding: [50, 50, 50, 350], duration: 1500 });
+                }
+                showToast(`📂 Loaded ${combinedFeatures.length} features from ${files.length} file(s)`, 'success');
+            });
+        }
+
+        
+        
+        
+        async function loadCSVLayersFromDB() {
+            if (!db) return 0;
+            const rows = await dbGetAll('csvLayers').catch(() => []);
+            if (!rows.length) return 0;
+
+            
+            rows.sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0));
+
+            let totalFeatures = 0;
+            for (const row of rows) {
+                const { filename, rawText } = row;
+                if (!rawText) continue;
+                const fnUp = filename.toUpperCase();
+
+                let targetLayer, dataType;
+                const results = Papa.parse(rawText, { header: true, skipEmptyLines: true });
+                const headers = results.meta.fields || [];
+                const isMarkupFile = headers.includes('Color') &&
+                    (headers.includes(getMarkupE()) || headers.includes(getCoordE()) || headers.includes('Coords'));
+
+                if (isMarkupFile) {
+                    targetLayer = createImportedMarkupLayer(filename); dataType = 'MARKUP';
+                } else {
+                    const matchedType = appSettings.layerTypes.find(t => fnUp.includes(t.keyword.toUpperCase()));
+                    if (!matchedType) continue;
+                    dataType = matchedType.id;
+                    targetLayer = createDrillLayer(filename, dataType);
+                }
+
+                const targetSource = targetLayer.getSource();
+                results.data.forEach(csvRow => {
+                    try {
+                        if (isMarkupFile) {
+                            const rowType = (csvRow.Type || 'Point').trim();
+                            if (rowType === 'LineString' && csvRow.Coords) {
+                                const mgaCoords = JSON.parse(csvRow.Coords);
+                                if (!Array.isArray(mgaCoords) || mgaCoords.length < 2) return;
+                                const wmCoords = mgaCoords.map(c =>
+                                    ol.proj.transform([parseFloat(c[0]), parseFloat(c[1])], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR)
+                                );
+                                const feat = new ol.Feature({ geometry: new ol.geom.LineString(wmCoords), origin: csvRow.Origin || 'imported', ts: csvRow.Timestamp || '' });
+                                feat.setStyle(createMarkupStyle(csvRow.Color || currentMarkupColor));
+                                targetSource.addFeature(feat);
+                                totalFeatures++;
+                            } else {
+                                const E_key = csvRow.hasOwnProperty(getMarkupE()) ? getMarkupE() : getCoordE();
+                                const N_key = csvRow.hasOwnProperty(getMarkupN()) ? getMarkupN() : getCoordN();
+                                const E = csvRow[E_key], N = csvRow[N_key];
+                                if (!E || !N || isNaN(parseFloat(E)) || isNaN(parseFloat(N))) return;
+                                const coords = ol.proj.transform([parseFloat(E), parseFloat(N)], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR);
+                                const feat = new ol.Feature({ geometry: new ol.geom.Point(coords), attributes: { ...csvRow, filename }, origin: csvRow.Origin || 'imported', ts: csvRow.Timestamp || '' });
+                                if (csvRow.Color) feat.setStyle(createMarkupStyle(csvRow.Color));
+                                targetSource.addFeature(feat);
+                                totalFeatures++;
+                            }
+                        } else {
+                            const E = csvRow[getCoordE()], N = csvRow[getCoordN()];
+                            if (!E || !N || isNaN(parseFloat(E)) || isNaN(parseFloat(N))) return;
+                            const coords = ol.proj.transform([parseFloat(E), parseFloat(N)], MGA94_ZONE_50_CODE, WGS84_WEB_MERCATOR);
+                            targetSource.addFeature(new ol.Feature({ geometry: new ol.geom.Point(coords), attributes: { ...csvRow, filename }, origin: 'imported' }));
+                            totalFeatures++;
+                        }
+                    } catch(e) {}
+                });
+            }
+            updateLayerListUI();
+            updateQuickLayerBar();
+            return totalFeatures;
+        }
+
+        window.deleteSelectedFeatures = function() {
+            const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
+            if (selectedFeatures.getLength() === 0) { showToast('⚠️ No features selected', 'warning'); return; }
+            selectedFeatures.forEach(f => markupSource.removeFeature(f));
+            selectedFeatures.clear();
+            showToast('🗑 Selected feature deleted', '');
+        };
+
+        window.clearAllMarkups = function() {
+            if (confirm('Clear ALL markups? This cannot be undone.')) {
+                const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
+                markupSource.clear();
+                selectedFeatures.clear();
+                undoStack = [];
+                updateUndoBtn();
+                dbClear('markups').then(() => updateSavedMarkupsCount());
+                showToast('🧹 All markups cleared', 'warning');
+            }
+        };
+
+        
+        
+        
+        let lsMenuOpen = false;
+        window.toggleLayerSwitcherMenu = function() {
+            lsMenuOpen = !lsMenuOpen;
+            document.getElementById('lsMenu').classList.toggle('open', lsMenuOpen);
+            document.getElementById('lsBurger').classList.toggle('open', lsMenuOpen);
+        };
+
+        function setupLayerSwitcher(map, baseLayers) {
+            const menuDiv = document.getElementById('lsMenu');
+            baseLayers.forEach(layer => {
+                const button = document.createElement('button');
+                button.textContent = layer.get('title');
+                if (layer.getVisible()) button.classList.add('active');
+                button.onclick = () => {
+                    baseLayers.forEach(l => l.setVisible(false));
+                    layer.setVisible(true);
+                    document.querySelectorAll('#lsMenu button').forEach(b => b.classList.remove('active'));
+                    button.classList.add('active');
+                    
+                    lsMenuOpen = false;
+                    document.getElementById('lsMenu').classList.remove('open');
+                    document.getElementById('lsBurger').classList.remove('open');
+                };
+                menuDiv.appendChild(button);
+            });
+        }
+
+        
+        
+        
+        const panels = {
+            'Import':   { id: 'importPanel',       buttonId: 'toggleImportButton' },
+            'Manager':  { id: 'layerManager',      buttonId: 'toggleLayerManagerButton' },
+            'Markup':   { id: 'markupPanel',       buttonId: 'toggleMarkupButton' },
+            'Offline':  { id: 'offlinePanel',      buttonId: 'toggleOfflineButton' },
+            'Settings': { id: 'settingsPanel',     buttonId: 'toggleSettingsButton' },
+        };
+
+        
+        let quickBarVisible = true;
+        window.toggleQuickBar = function() {
+            const bar = document.getElementById('quickDrawBar');
+            const btn = document.getElementById('quickBarToggleBtn');
+            quickBarVisible = !quickBarVisible;
+            
+            bar.style.opacity = quickBarVisible ? '1' : '0';
+            bar.style.pointerEvents = quickBarVisible ? 'auto' : 'none';
+            if (btn) btn.textContent = quickBarVisible ? 'Hide' : 'Show';
+        };
+
+        window.togglePanel = function(panelName) {
+            const target = panels[panelName];
+            const panel = document.getElementById(target.id);
+            const isOpen = panel.style.display === 'block';
+
+            
+            Object.keys(panels).forEach(key => {
+                document.getElementById(panels[key].id).style.display = 'none';
+                document.getElementById(panels[key].buttonId).classList.remove('panel-active');
+            });
+
+            if (!isOpen) {
+                panel.style.display = 'block';
+                document.getElementById(target.buttonId).classList.add('panel-active');
+
+                if (panelName === 'Markup') {
+                    selectInteraction.setActive(true);
+                    modifyInteraction.setActive(true);
+                    selectedFeatures.clear();
+                } else {
+                    if (drawInteraction) map.removeInteraction(drawInteraction);
+                    selectInteraction.setActive(false);
+                    modifyInteraction.setActive(false);
+                    
+                    document.querySelectorAll('[id^="drawBtn-"]').forEach(b => { b.style.background = '#1e293b'; b.style.borderColor = 'var(--border)'; b.style.color = 'var(--text-primary)'; });
+                    document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
+                }
+                if (panelName === 'Manager') updateLayerListUI();
+                if (panelName === 'Offline') {
+                    updateConnectionStatusCard();
+                    updateTileCacheCount();
+                    updateSavedMarkupsCount();
+                }
+                if (panelName === 'Settings') {
+                    populateSettingsPanel();
+                    checkGPSPermission();
+                }
+            } else {
+                if (panelName === 'Markup') {
+                    if (drawInteraction) map.removeInteraction(drawInteraction);
+                    selectInteraction.setActive(false);
+                    modifyInteraction.setActive(false);
+                    selectedFeatures.clear();
+                    document.querySelectorAll('[id^="drawBtn-"]').forEach(b => { b.style.background = '#1e293b'; b.style.borderColor = 'var(--border)'; b.style.color = 'var(--text-primary)'; });
+                    document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
+                }
+            }
+        };
+
+        
+        
+        
+        function createDrillLayer(fileName, type) {
+            const existing = drillDataLayerGroup.getLayers().getArray().find(l => l.get('title') === fileName);
+            if (existing) { existing.getSource().clear(); return existing; }
+
+            const source = new ol.source.Vector({ wrapX: false });
+            const typeCfg = appSettings.layerTypes.find(t => t.id === type) || { color: '#ffffff', radius: 6, priority: 30, showLabel: false };
+            const style = createLayerStyle(typeCfg);
+            const zIndex = typeCfg.priority;
+
+            const newLayer = new ol.layer.Vector({ title: fileName, source, style, zIndex, dataType: type });
+            drillDataLayerGroup.getLayers().push(newLayer);
+            return newLayer;
+        }
+
+        
+        function createImportedMarkupLayer(fileName) {
+            const existing = drillDataLayerGroup.getLayers().getArray().find(
+                l => l.get('title') === fileName && l.get('dataType') === 'MARKUP'
+            );
+            if (existing) { existing.getSource().clear(); return existing; }
+
+            const source = new ol.source.Vector({ wrapX: false });
+            const layerStyle = function(feature) {
+                if (feature.getStyle()) return feature.getStyle();
+                return createMarkupStyle(currentMarkupColor);
+            };
+            const newLayer = new ol.layer.Vector({
+                title: fileName,
+                source,
+                style: layerStyle,
+                zIndex: 98,   
+                dataType: 'MARKUP'
+            });
+            drillDataLayerGroup.getLayers().push(newLayer);
+            return newLayer;
+        }
+
+        
+        const _collapsedGroups = {};
+
+        
+        function extractSiteCode(filename) {
+            const m = (filename || '').match(/[A-Za-z]\d{3}_\d{3}_\d{3}/);
+            return m ? m[0].toUpperCase() : null;
+        }
+
+        function _shortenName(title) {
+            return (title || '')
+                .replace(/^FIELD_MARKUPS_MARKUPS_(NEW_|ALL_)?/i, '')
+                .replace(/\.csv$/i, '')
+                .replace(/_\d{4}-\d{2}-\d{2}T[\dZ\-]+$/i, '') || title;
+        }
+
+        function _makeLayerItem(layer) {
+            const div = document.createElement('div');
+            div.className = 'dynamic-layer-item';
+            const title = layer.get('title');
+            const featureCount = layer.getSource().getFeatures().length;
+            const safeTitle = title.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const displayName = _shortenName(title);
+            div.innerHTML = `
+                <div class="layer-name" title="${title}">
+                    <span class="name-text">${displayName}</span>
+                    <small>${featureCount} feature(s)</small>
+                </div>
+                <div class="layer-actions">
+                    <button class="layer-zoom-btn" onclick="zoomToLayer('${safeTitle}')" title="Zoom to layer">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                    </button>
+                    <label class="layer-check-wrap" title="Show / hide layer">
+                        <input type="checkbox" ${layer.getVisible() ? 'checked' : ''} onchange="toggleLayerVisibility('${safeTitle}')">
+                    </label>
+                    <button class="layer-remove-btn" onclick="removeLayer('${safeTitle}')" title="Remove layer">✕</button>
+                </div>
+            `;
+            return div;
+        }
+
+        function _makeGroupHeader(label, groupKey, layers) {
+            const collapsed = !!_collapsedGroups[groupKey];
+            const allVisible = layers.every(l => l.getVisible());
+            const anyVisible = layers.some(l => l.getVisible());
+
+            const header = document.createElement('div');
+            header.className = 'layer-group-header';
+            header.innerHTML = `
+                <span class="layer-group-chevron${collapsed ? ' collapsed' : ''}">▾</span>
+                <span class="layer-group-title">${label} (${layers.length})</span>
+                <label class="layer-group-check" title="Toggle all" onclick="event.stopPropagation()">
+                    <input type="checkbox" ${allVisible ? 'checked' : anyVisible ? 'indeterminate' : ''} onchange="toggleGroupVisibility('${groupKey}', this.checked)">
+                </label>
+            `;
+
+            const body = document.createElement('div');
+            body.className = 'layer-group-body' + (collapsed ? ' collapsed' : '');
+            body.id = 'layer-group-body-' + groupKey;
+
+            header.onclick = () => {
+                _collapsedGroups[groupKey] = !_collapsedGroups[groupKey];
+                const chev = header.querySelector('.layer-group-chevron');
+                chev.classList.toggle('collapsed', !!_collapsedGroups[groupKey]);
+                body.classList.toggle('collapsed', !!_collapsedGroups[groupKey]);
+            };
+
+            const cb = header.querySelector('input[type="checkbox"]');
+            if (!allVisible && anyVisible) cb.indeterminate = true;
+
+            return { header, body };
+        }
+
+        window.toggleGroupVisibility = function(groupKey, visible) {
+            const drillLayers = drillDataLayerGroup.getLayers().getArray();
+            const liveMarkup = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+
+            if (groupKey === 'MARKUP') {
+                if (liveMarkup) liveMarkup.setVisible(visible);
+                drillLayers.filter(l => l.get('dataType') === 'MARKUP').forEach(l => l.setVisible(visible));
+
+            } else if (groupKey.startsWith('site_')) {
+                const withoutPrefix = groupKey.slice(5); // strip "site_"
+                const siteCodeRe = /^([A-Z]\d{3}_\d{3}_\d{3})(?:_(.+))?$/;
+                const m = withoutPrefix.match(siteCodeRe);
+                if (m) {
+                    const siteCode = m[1];
+                    const typeFilter = m[2] || null; // null means all types for this site
+                    drillLayers
+                        .filter(l => l.get('dataType') !== 'MARKUP')
+                        .filter(l => extractSiteCode(l.get('title')) === siteCode)
+                        .filter(l => !typeFilter || l.get('dataType') === typeFilter)
+                        .forEach(l => l.setVisible(visible));
+                }
+
+            } else {
+                drillLayers.filter(l => l.get('dataType') === groupKey).forEach(l => l.setVisible(visible));
+            }
+
+            updateQuickLayerBar();
+            updateLayerListUI();
+        };
+
+        function updateLayerListUI() {
+            const listDiv = document.getElementById('layerList');
+            listDiv.innerHTML = `
+                <div style="padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px;">
+                    <label for="holeLabelSize">Label Size (${currentHoleLabelSize}):</label>
+                    <input type="range" id="holeLabelSize" min="8" max="20" value="${parseInt(currentHoleLabelSize)}" oninput="updateHoleLabelSize(this.value)" style="width:100%; margin:4px 0 0; padding:0; background:transparent; border:none;">
+                </div>
+            `;
+
+            const drillLayers = drillDataLayerGroup.getLayers().getArray();
+            const liveMarkupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+            const importedMarkupLayers = drillLayers.filter(l => l.get('dataType') === 'MARKUP');
+            const drillOnlyLayers = drillLayers.filter(l => l.get('dataType') !== 'MARKUP');
+
+            const allMarkupLayers = [...(liveMarkupLayer ? [liveMarkupLayer] : []), ...importedMarkupLayers];
+            if (allMarkupLayers.length > 0) {
+                const { header, body } = _makeGroupHeader('Markups', 'MARKUP', allMarkupLayers);
+                if (liveMarkupLayer) {
+                    const liveCount = liveMarkupLayer.getSource().getFeatures().length;
+                    const liveItem = document.createElement('div');
+                    liveItem.className = 'dynamic-layer-item';
+                    liveItem.innerHTML = `
+                        <div class="layer-name">
+                            <span class="name-text">Live Drawing</span>
+                            <small>${liveCount} feature(s)</small>
+                        </div>
+                        <div class="layer-actions">
+                            <label class="layer-check-wrap" title="Show / hide live markups">
+                                <input type="checkbox" ${liveMarkupLayer.getVisible() ? 'checked' : ''} onchange="toggleLayerVisibility('Field Markups')">
+                            </label>
+                        </div>
+                    `;
+                    body.appendChild(liveItem);
+                }
+                importedMarkupLayers.forEach(layer => body.appendChild(_makeLayerItem(layer)));
+                listDiv.appendChild(header);
+                listDiv.appendChild(body);
+            }
+
+            if (drillOnlyLayers.length > 0) {
+                const siteMap = {};  // siteCode -> { type -> [layers] }
+                drillOnlyLayers.forEach(layer => {
+                    const code = extractSiteCode(layer.get('title')) || 'Other';
+                    const type = layer.get('dataType') || 'Other';
+                    if (!siteMap[code]) siteMap[code] = {};
+                    if (!siteMap[code][type]) siteMap[code][type] = [];
+                    siteMap[code][type].push(layer);
+                });
+
+                const typeOrder = appSettings.layerTypes.map(t => t.id);
+                const sortedCodes = Object.keys(siteMap).sort((a, b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b));
+
+                sortedCodes.forEach(code => {
+                    const allInSite = Object.values(siteMap[code]).flat();
+                    const siteKey = 'site_' + code;
+                    const { header: siteHeader, body: siteBody } = _makeGroupHeader(code, siteKey, allInSite);
+
+                    const types = Object.keys(siteMap[code]).sort((a, b) => {
+                        const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b);
+                        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                    });
+
+                    types.forEach(type => {
+                        const typeLayers = siteMap[code][type];
+                        if (typeLayers.length === 1) {
+                            const item = _makeLayerItem(typeLayers[0]);
+                            const tag = document.createElement('span');
+                            tag.style.cssText = 'font-size:9px;font-weight:700;text-transform:uppercase;color:var(--text-muted);background:rgba(255,255,255,0.07);border-radius:3px;padding:1px 5px;margin-right:2px;flex-shrink:0;letter-spacing:0.05em;';
+                            tag.textContent = type;
+                            item.insertBefore(tag, item.firstChild);
+                            siteBody.appendChild(item);
+                        } else {
+                            const typeKey = siteKey + '_' + type;
+                            const { header: typeHeader, body: typeBody } = _makeGroupHeader(type, typeKey, typeLayers);
+                            typeHeader.style.paddingLeft = '10px';
+                            typeBody.style.paddingLeft = '8px';
+                            typeLayers.forEach(layer => typeBody.appendChild(_makeLayerItem(layer)));
+                            siteBody.appendChild(typeHeader);
+                            siteBody.appendChild(typeBody);
+                        }
+                    });
+
+                    listDiv.appendChild(siteHeader);
+                    listDiv.appendChild(siteBody);
+                });
+            }
+
+            if (drillLayers.length === 0 && !liveMarkupLayer) {
+                listDiv.innerHTML += '<p style="font-size:11px; color:var(--text-muted); margin-top:8px;">No layers loaded.</p>';
+            }
+
+            updateQuickLayerBar();
+        }
+
+        window.toggleLayerVisibility = function(layerTitle) {
+            const ml = map.getLayers().getArray().find(l => l.get('title') === layerTitle);
+            if (ml) { ml.setVisible(!ml.getVisible()); updateQuickLayerBar(); return; }
+            drillDataLayerGroup.getLayers().getArray().forEach(l => {
+                if (l.get('title') === layerTitle) l.setVisible(!l.getVisible());
+            });
+            updateQuickLayerBar();
+        };
+
+        window.removeLayer = function(layerTitle) {
+            if (confirm(`Remove layer "${layerTitle}"?`)) {
+                const layers = drillDataLayerGroup.getLayers();
+                const toRemove = layers.getArray().find(l => l.get('title') === layerTitle);
+                if (toRemove) {
+                    layers.remove(toRemove);
+                    dbDelete('csvLayers', layerTitle).catch(() => {});
+                    updateLayerListUI();
+                }
+            }
+        };
+
+        window.removeAllLayers = function() {
+            if (confirm('Remove ALL loaded drill/markup layers? This cannot be undone.')) {
+                drillDataLayerGroup.getLayers().clear();
+                dbClear('csvLayers').catch(() => {});
+                updateLayerListUI();
+                showToast('All layers removed', 'warning');
+            }
+        };
+
+        window.clearLayerDB = async function() {
+            if (confirm('Clear all saved CSV layers from device storage? The map layers will also be removed.')) {
+                drillDataLayerGroup.getLayers().clear();
+                await dbClear('csvLayers').catch(() => {});
+                updateLayerListUI();
+                showToast('🗑 Layer database cleared', 'warning');
+            }
+        };
+
+        window.zoomToLayer = function(layerTitle) {
+            let layer = map.getLayers().getArray().find(l => l.get('title') === layerTitle);
+            if (!layer) layer = drillDataLayerGroup.getLayers().getArray().find(l => l.get('title') === layerTitle);
+            if (!layer) return;
+            const features = layer.getSource().getFeatures();
+            if (!features.length) { showToast('No features to zoom to', 'warning'); return; }
+            const extent = ol.extent.createEmpty();
+            features.forEach(f => ol.extent.extend(extent, f.getGeometry().getExtent()));
+            map.getView().fit(extent, { padding: [60, 60, 60, 60], duration: 800, maxZoom: 19 });
+        };
+
+        function updateQuickLayerBar() {
+            const bar = document.getElementById('quickLayerBar');
+            const drillLayers = drillDataLayerGroup.getLayers().getArray();
+            const hasDrill = drillLayers.length > 0;
+            if (bar) bar.style.display = hasDrill ? 'flex' : 'none';
+
+            appSettings.layerTypes.forEach(typeCfg => {
+                let btn = document.getElementById('qlb-' + typeCfg.id);
+                if (!btn) {
+                    btn = document.createElement('button');
+                    btn.id = 'qlb-' + typeCfg.id;
+                    btn.className = 'qlb-btn';
+                    btn.title = 'Toggle ' + typeCfg.id + ' layers';
+                    btn.onclick = function() { quickLayerToggle(typeCfg.id); };
+                    const qlbBar = document.getElementById('quickLayerBar');
+                    if (qlbBar) qlbBar.appendChild(btn);
+                }
+                const matching = drillLayers.filter(l => l.get('dataType') === typeCfg.id);
+                btn.style.display = matching.length === 0 ? 'none' : '';
+                btn.textContent = typeCfg.keyword;
+                btn.style.color = typeCfg.color;
+                btn.style.borderColor = matching.some(l => l.getVisible()) ? typeCfg.color : 'var(--border)';
+                btn.style.background = matching.some(l => l.getVisible()) ? typeCfg.color + '30' : 'rgba(255,255,255,0.05)';
+            });
+
+            const liveMarkupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+            const importedMarkupLayers = drillLayers.filter(l => l.get('dataType') === 'MARKUP');
+            const markupBtn = document.getElementById('qlb-MARKUP');
+            if (markupBtn) {
+                const hasAnyMarkup = liveMarkupLayer || importedMarkupLayers.length > 0;
+                markupBtn.style.display = hasAnyMarkup ? '' : 'none';
+                const anyMarkupVisible = (liveMarkupLayer && liveMarkupLayer.getVisible()) ||
+                    importedMarkupLayers.some(l => l.getVisible());
+                markupBtn.classList.toggle('on', anyMarkupVisible);
+            }
+        }
+
+        window.quickLayerToggle = function(type) {
+            if (type === 'MARKUP') {
+                const liveMarkup = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+                const importedMarkups = drillDataLayerGroup.getLayers().getArray().filter(l => l.get('dataType') === 'MARKUP');
+                const allMarkups = [...(liveMarkup ? [liveMarkup] : []), ...importedMarkups];
+                const anyVisible = allMarkups.some(l => l.getVisible());
+                allMarkups.forEach(l => l.setVisible(!anyVisible));
+            } else {
+                const drillLayers = drillDataLayerGroup.getLayers().getArray();
+                const matching = drillLayers.filter(l => l.get('dataType') === type);
+                const anyVisible = matching.some(l => l.getVisible());
+                matching.forEach(l => l.setVisible(!anyVisible));
+            }
+            updateQuickLayerBar();
+            updateLayerListUI();
+        };
+
+        window.handleCSVUpload = function(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+            const statusDiv = document.getElementById('fileStatus');
+            statusDiv.innerHTML = 'Processing…';
+            statusDiv.style.display = 'block';
+            document.getElementById('csvFile').value = '';
+            handleCSVUploadFiles(files, statusDiv);
+        };
+
+        window.exportMarkupCSV = function() {
+            const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
+            const exportFilter = document.getElementById('exportFilter').value;
+            const baseFilename = document.getElementById('exportFilename').value.toUpperCase().replace(/\s/g, '_');
+
+            let toExport = markupSource.getFeatures().filter(f => {
+                const t = f.getGeometry().getType();
+                return t === 'Point' || t === 'LineString';
+            });
+            if (exportFilter === 'new') toExport = toExport.filter(f => f.get('origin') === 'new');
+            if (!toExport.length) { showToast('⚠️ No markups to export', 'warning'); return; }
+
+            function extractColor(feature) {
+                let color = '#f7a800';
+                try {
+                    const style = feature.getStyle() || createMarkupStyle(currentMarkupColor);
+                    const img = style.getImage ? style.getImage() : null;
+                    const fill = img ? img.getFill() : null;
+                    const stroke = style.getStroke ? style.getStroke() : null;
+                    const raw = (fill && fill.getColor()) || (stroke && stroke.getColor()) || color;
+                    if (typeof raw === 'string' && raw.startsWith('rgba')) {
+                        const parts = raw.match(/\d+/g);
+                        if (parts && parts.length >= 3)
+                            color = '#' + parts.slice(0,3).map(n => parseInt(n).toString(16).padStart(2,'0')).join('');
+                    } else if (typeof raw === 'string') {
+                        color = raw;
+                    }
+                } catch(e) {}
+                return color;
+            }
+
+            const csvRows = [['Type', getMarkupE(), getMarkupN(), 'Coords', 'Timestamp', 'Color', 'Origin']];
+
+            toExport.forEach(feature => {
+                const geomType = feature.getGeometry().getType();
+                const color = extractColor(feature);
+                const ts = feature.get('ts') || new Date().toISOString();
+                const origin = feature.get('origin') || 'unknown';
+
+                if (geomType === 'Point') {
+                    const wm = feature.getGeometry().getCoordinates();
+                    const mga = ol.proj.transform(wm, WGS84_WEB_MERCATOR, MGA94_ZONE_50_CODE);
+                    csvRows.push(['Point', mga[0].toFixed(2), mga[1].toFixed(2), '', ts, color, origin]);
+
+                } else if (geomType === 'LineString') {
+                    const wmCoords = feature.getGeometry().getCoordinates();
+                    const mgaCoords = wmCoords.map(c => {
+                        const m = ol.proj.transform(c, WGS84_WEB_MERCATOR, MGA94_ZONE_50_CODE);
+                        return [parseFloat(m[0].toFixed(2)), parseFloat(m[1].toFixed(2))];
+                    });
+                    csvRows.push(['LineString', '', '', JSON.stringify(mgaCoords), ts, color, origin]);
+                }
+            });
+
+            const csvString = typeof Papa !== 'undefined' ? Papa.unparse(csvRows, { header: true }) : csvRows.map(r => r.join(',')).join('\n');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `${baseFilename}_MARKUPS_${exportFilter === 'new' ? 'NEW' : 'ALL'}_${timestamp}.csv`;
+
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            const ptCount = toExport.filter(f => f.getGeometry().getType() === 'Point').length;
+            const lnCount = toExport.filter(f => f.getGeometry().getType() === 'LineString').length;
+            showToast(`✅ Exported ${ptCount} point(s), ${lnCount} line(s) — ${filename}`, 'success');
+        };
+
+        window.stopTracking = function() {
+            if (recenterInterval) { clearInterval(recenterInterval); recenterInterval = null; }
+            const btn = document.getElementById('recenterButton');
+            btn.innerHTML = '🎯 Recenter';
+            btn.onclick = recenterGPS;
+            btn.style.background = 'var(--accent-green)';
+        };
+
+        window.toggleGpsTracking = function() {
+            if (isGpsActive) {
+                isGpsActive = false;
+                stopTracking();
+                if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+                document.getElementById('gpsLabel').textContent = 'GPS';
+                document.getElementById('gpsStartButton').classList.remove('active');
+                document.getElementById('recenterButton').style.display = 'none';
+                const gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
+                if (gpsLayer) { gpsLayer.getSource().clear(); map.removeLayer(gpsLayer); gpsSource = null; }
+                document.getElementById('locationIndicator').innerHTML = 'GPS Disabled. <span id="offlineBadge" class="' + (isOnline ? '' : 'show') + '">OFFLINE</span>';
+                document.getElementById('locationIndicator').style.background = '#475569';
+            } else {
+                startGeolocation();
+            }
+        };
+
+        window.recenterGPS = function() {
+            const view = map.getView();
+            const gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
+            const lastFeature = gpsLayer && gpsLayer.getSource() ? gpsLayer.getSource().getFeatures()[0] : null;
+            if (!lastFeature) return;
+
+            view.cancelAnimations();
+            view.animate({ center: lastFeature.getGeometry().getCoordinates(), duration: 500 });
+
+            if (!recenterInterval) {
+                recenterInterval = setInterval(() => {
+                    const cur = gpsLayer.getSource() ? gpsLayer.getSource().getFeatures()[0] : null;
+                    if (cur) view.animate({ center: cur.getGeometry().getCoordinates(), duration: 500, easing: ol.easing.linear });
+                }, 2000);
+                const btn = document.getElementById('recenterButton');
+                btn.innerHTML = '🛑 Stop Auto-Track';
+                btn.style.background = 'var(--accent-red)';
+                btn.onclick = stopTracking;
+            } else {
+                stopTracking();
+            }
+        };
+
+        window.startGeolocation = function() {
+            const locationIndicator = document.getElementById('locationIndicator');
+            if (!navigator.geolocation) {
+                locationIndicator.innerHTML = 'GPS not supported by this device.';
+                return;
+            }
+            isGpsActive = true;
+            gpsFirstFix = true;
+            document.getElementById('gpsLabel').textContent = 'GPS Active';
+            document.getElementById('gpsStartButton').classList.add('active');
+            document.getElementById('recenterButton').style.display = 'block';
+
+            let gpsLayer = map.getLayers().getArray().find(l => l.get('title') === 'Live GPS');
+            if (!gpsLayer) {
+                gpsSource = new ol.source.Vector();
+                gpsLayer = new ol.layer.Vector({
+                    title: 'Live GPS',
+                    source: gpsSource,
+                    style: function(feature) {
+                        const type = feature.get('gpsType');
+                        if (type === 'accuracy') {
+                            return new ol.style.Style({
+                                fill: new ol.style.Fill({ color: 'rgba(59,130,246,0.12)' }),
+                                stroke: new ol.style.Stroke({ color: 'rgba(59,130,246,0.5)', width: 1.5 })
+                            });
+                        }
+                        return new ol.style.Style({
+                            image: new ol.style.Circle({
+                                radius: 10,
+                                fill: new ol.style.Fill({ color: 'rgba(59,130,246,1)' }),
+                                stroke: new ol.style.Stroke({ color: 'white', width: 3 })
+                            })
+                        });
+                    },
+                    zIndex: 999
+                });
+                map.addLayer(gpsLayer);
+            }
+
+            watchId = navigator.geolocation.watchPosition(function(position) {
+                if (!isGpsActive) { navigator.geolocation.clearWatch(watchId); return; }
+                const accuracy = position.coords.accuracy;
+                const lonLat = [position.coords.longitude, position.coords.latitude];
+                const webMercatorCoords = ol.proj.fromLonLat(lonLat);
+                const mgaCoords = ol.proj.transform(lonLat, 'EPSG:4326', MGA94_ZONE_50_CODE);
+
+                window._lastGpsCoords = webMercatorCoords;
+
+                if (accuracy > getMaxAccuracy()) {
+                    locationIndicator.style.background = 'var(--accent-red)';
+                    locationIndicator.innerHTML = `⚠️ LOW ACC: ±${accuracy.toFixed(0)}m E:${mgaCoords[0].toFixed(1)} N:${mgaCoords[1].toFixed(1)} <span id="offlineBadge" class="${isOnline ? '' : 'show'}">OFFLINE</span>`;
+                } else {
+                    locationIndicator.style.background = '#1d4ed8';
+                    locationIndicator.innerHTML = `E:${mgaCoords[0].toFixed(2)} N:${mgaCoords[1].toFixed(2)} ±${accuracy.toFixed(1)}m <span id="offlineBadge" class="${isOnline ? '' : 'show'}">OFFLINE</span>`;
+                }
+
+                gpsLayer.getSource().clear();
+
+                try {
+                    const steps = 64;
+                    const earthRadius = 6378137;
+                    const lat = lonLat[1] * Math.PI / 180;
+                    const ring = [];
+                    for (let i = 0; i <= steps; i++) {
+                        const angle = (i / steps) * 2 * Math.PI;
+                        const dLat = (accuracy / earthRadius) * Math.cos(angle);
+                        const dLon = (accuracy / (earthRadius * Math.cos(lat))) * Math.sin(angle);
+                        ring.push(ol.proj.fromLonLat([
+                            lonLat[0] + dLon * 180 / Math.PI,
+                            lonLat[1] + dLat * 180 / Math.PI
+                        ]));
+                    }
+                    gpsLayer.getSource().addFeature(new ol.Feature({
+                        geometry: new ol.geom.Polygon([ring]),
+                        gpsType: 'accuracy'
+                    }));
+                } catch(e) { console.warn('[GPS] accuracy circle:', e); }
+
+                const dotFeat = new ol.Feature({ geometry: new ol.geom.Point(webMercatorCoords), gpsType: 'dot' });
+                gpsLayer.getSource().addFeature(dotFeat);
+
+                window._lastGpsCoords = webMercatorCoords;
+
+                if (gpsFirstFix) {
+                    gpsFirstFix = false;
+                    map.getView().animate({ center: webMercatorCoords, zoom: 17, duration: 800 });
+                    showToast('📍 Located — zoomed to your position', 'success');
+                }
+            }, function(error) {
+                locationIndicator.innerHTML = `GPS Error (${error.code}): ${error.message}`;
+                locationIndicator.style.background = 'var(--accent-red)';
+                isGpsActive = false;
+                document.getElementById('gpsLabel').textContent = 'GPS';
+                document.getElementById('gpsStartButton').classList.remove('active');
+                document.getElementById('recenterButton').style.display = 'none';
+                stopTracking();
+            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+        };
+
+        window.zoomToDeviceLocation = function() {
+            if (window._lastGpsCoords) {
+                map.getView().animate({ center: window._lastGpsCoords, zoom: 17, duration: 600 });
+                showToast('📍 Zoomed to your location', 'success');
+                return;
+            }
+
+            if (!isGpsActive) {
+                showToast('🔍 Starting GPS and zooming…', '');
+                startGeolocation();
+                return;
+            }
+
+            showToast('⏳ Waiting for GPS fix…', '');
+        };
+
+        window.addEventListener('beforeunload', function(e) {
+            e.preventDefault();
+            e.returnValue = 'You have unsaved data. Are you sure you want to leave?';
+            return e.returnValue;
+        });
+
+        async function loadSettings() {
+            try {
+                const row = await new Promise((res, rej) => {
+                    const tx = db.transaction('settings', 'readonly');
+                    const req = tx.objectStore('settings').get('appSettings');
+                    req.onsuccess = () => res(req.result);
+                    req.onerror = () => rej(req.error);
+                });
+                if (row && row.value) {
+                    const s = row.value;
+                    if (s.layerTypes && s.layerTypes.length) appSettings.layerTypes = s.layerTypes;
+                    if (s.coordinateE  !== undefined) appSettings.coordinateE  = s.coordinateE;
+                    if (s.coordinateN  !== undefined) appSettings.coordinateN  = s.coordinateN;
+                    if (s.holeIdKey    !== undefined) appSettings.holeIdKey    = s.holeIdKey;
+                    if (s.markupEasting  !== undefined) appSettings.markupEasting  = s.markupEasting;
+                    if (s.markupNorthing !== undefined) appSettings.markupNorthing = s.markupNorthing;
+                    if (s.startLon  !== undefined) appSettings.startLon  = s.startLon;
+                    if (s.startLat  !== undefined) appSettings.startLat  = s.startLat;
+                    if (s.startZoom !== undefined) appSettings.startZoom = s.startZoom;
+                    if (s.projectionCode !== undefined) appSettings.projectionCode = s.projectionCode;
+                    if (s.proj4String    !== undefined) appSettings.proj4String    = s.proj4String;
+                    if (s.gpsAccuracyThreshold !== undefined) appSettings.gpsAccuracyThreshold = s.gpsAccuracyThreshold;
+                    if (s.holeLabelSize !== undefined) appSettings.holeLabelSize = s.holeLabelSize;
+                    if (s.tapSlop    !== undefined) appSettings.tapSlop    = s.tapSlop;
+                    if (s.eraseHitPx !== undefined) appSettings.eraseHitPx = s.eraseHitPx;
+                }
+            } catch(e) {}
+        }
+
+        async function persistSettings() {
+            try {
+                await dbSave('settings', { key: 'appSettings', value: appSettings });
+            } catch(e) {}
+        }
+
+        window.saveSettings = async function() {
+            appSettings.coordinateE  = document.getElementById('settingsECol').value.trim();
+            appSettings.coordinateN  = document.getElementById('settingsNCol').value.trim();
+            appSettings.holeIdKey    = document.getElementById('settingsHoleId').value.trim();
+            appSettings.markupEasting  = document.getElementById('settingsMarkupE').value.trim() || 'Easting';
+            appSettings.markupNorthing = document.getElementById('settingsMarkupN').value.trim() || 'Northing';
+            appSettings.startLon  = parseFloat(document.getElementById('settingsStartLon').value) || 0;
+            appSettings.startLat  = parseFloat(document.getElementById('settingsStartLat').value) || 0;
+            appSettings.startZoom = parseFloat(document.getElementById('settingsStartZoom').value) || 4;
+            appSettings.projectionCode = document.getElementById('settingsProjCode').value.trim() || 'EPSG:4326';
+            appSettings.proj4String    = document.getElementById('settingsProj4').value.trim() || '';
+            appSettings.gpsAccuracyThreshold = parseFloat(document.getElementById('settingsGpsAcc').value) || 15;
+            appSettings.holeLabelSize = parseInt(document.getElementById('settingsLabelSize').value) || 12;
+            appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 8;
+            appSettings.eraseHitPx = parseInt(document.getElementById('settingsEraseHit').value) || 30;
+
+            const rows = document.querySelectorAll('.settings-type-row[data-typeid]');
+            appSettings.layerTypes = Array.from(rows).map(row => ({
+                id:        row.dataset.typeid,
+                keyword:   row.querySelector('.st-keyword').value.trim().toUpperCase() || row.dataset.typeid,
+                color:     row.querySelector('.st-color').value,
+                opacity:   parseFloat(row.querySelector('.st-opacity').value) || 1,
+                radius:    parseInt(row.querySelector('.st-radius').value) || 6,
+                priority:  parseInt(row.querySelector('.st-priority').value) || 30,
+                showLabel: row.querySelector('.st-label').checked,
+            })).filter(t => t.keyword);
+
+            applyProjection();
+            currentHoleLabelSize = appSettings.holeLabelSize + 'px';
+
+            await persistSettings();
+            showToast('✅ Settings saved', 'success');
+
+            if (drillDataLayerGroup) {
+                drillDataLayerGroup.getLayers().getArray().forEach(layer => {
+                    const typeCfg = appSettings.layerTypes.find(t => t.id === layer.get('dataType'));
+                    if (typeCfg) {
+                        layer.setStyle(createLayerStyle(typeCfg));
+                        layer.setZIndex(typeCfg.priority);
+                        layer.changed();
+                    }
+                });
+                updateQuickLayerBar();
+                updateLayerListUI();
+            }
+        };
+
+        window.resetSettingsToDefaults = function() {
+            if (!confirm('Reset all settings to defaults?')) return;
+            appSettings.layerTypes = JSON.parse(JSON.stringify(DEFAULT_LAYER_TYPES));
+            appSettings.coordinateE  = 'Longitude';
+            appSettings.coordinateN  = 'Latitude';
+            appSettings.holeIdKey    = '';
+            appSettings.markupEasting  = 'Longitude';
+            appSettings.markupNorthing = 'Latitude';
+            appSettings.startLon  = 0;
+            appSettings.startLat  = 0;
+            appSettings.startZoom = 4;
+            appSettings.projectionCode = 'EPSG:4326';
+            appSettings.proj4String    = '+proj=longlat +datum=WGS84 +no_defs +type=crs';
+            appSettings.gpsAccuracyThreshold = 15;
+            appSettings.holeLabelSize = 12;
+            appSettings.tapSlop   = 8;
+            appSettings.eraseHitPx = 30;
+            persistSettings();
+            populateSettingsPanel();
+            showToast('↺ Settings reset to defaults', 'warning');
+        };
+
+        let _settingsTypeCounter = 100;
+        window.addLayerTypeSetting = function() {
+            _settingsTypeCounter++;
+            const newType = {
+                id: 'TYPE_' + _settingsTypeCounter,
+                keyword: '',
+                color: '#ffffff',
+                opacity: 1,
+                radius: 6,
+                priority: 30,
+                showLabel: false
+            };
+            appSettings.layerTypes.push(newType);
+            renderLayerTypeSettingsList();
+            const list = document.getElementById('layerTypeSettingsList');
+            const lastRow = list.lastElementChild;
+            if (lastRow) lastRow.querySelector('.st-keyword').focus();
+        };
+
+        window.removeLayerType = function(typeId) {
+            appSettings.layerTypes = appSettings.layerTypes.filter(t => t.id !== typeId);
+            renderLayerTypeSettingsList();
+        };
+
+        function renderLayerTypeSettingsList() {
+            const list = document.getElementById('layerTypeSettingsList');
+            if (!list) return;
+            list.innerHTML = '';
+            appSettings.layerTypes.forEach(typeCfg => {
+                const row = document.createElement('div');
+                row.className = 'settings-type-row';
+                row.dataset.typeid = typeCfg.id;
+                const opacity = typeCfg.opacity !== undefined ? typeCfg.opacity : 1;
+                const opacityPct = Math.round(opacity * 100);
+                row.innerHTML = `
+                    <div class="settings-type-row-header">
+                        <span class="settings-type-label">Layer Type</span>
+                        <button class="settings-del-btn" onclick="removeLayerType('${typeCfg.id}')" title="Remove">✕</button>
+                    </div>
+                    <label style="margin-bottom:3px;">Filename keyword (case-insensitive)</label>
+                    <input type="text" class="st-keyword" value="${typeCfg.keyword}" placeholder="e.g. HOLE" />
+                    <div class="settings-row-grid">
+                        <div>
+                            <label style="margin-bottom:2px;">Color</label>
+                            <input type="color" class="st-color" value="${typeCfg.color}" style="width:100%;height:28px;margin-bottom:0;" />
+                        </div>
+                        <div>
+                            <label style="margin-bottom:2px;">Size</label>
+                            <input type="number" class="settings-priority-input st-radius" value="${typeCfg.radius}" min="2" max="20" title="Circle radius in pixels" />
+                        </div>
+                        <div>
+                            <label style="margin-bottom:2px;">Z-order</label>
+                            <input type="number" class="settings-priority-input st-priority" value="${typeCfg.priority}" min="1" max="999" title="Rendering priority (higher = on top)" />
+                        </div>
+                    </div>
+                    <label style="margin-bottom:2px;margin-top:6px;">Opacity</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <input type="range" class="st-opacity" min="0.05" max="1" step="0.05" value="${opacity}"
+                            style="flex:1;margin-bottom:0;"
+                            oninput="this.nextElementSibling.textContent=Math.round(this.value*100)+'%'">
+                        <span class="st-opacity-val">${opacityPct}%</span>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:6px;margin-top:8px;margin-bottom:0;cursor:pointer;">
+                        <input type="checkbox" class="st-label" ${typeCfg.showLabel ? 'checked' : ''} style="width:auto;margin:0;" />
+                        Show label from Label column
+                    </label>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        window.checkGPSPermission = function() {
+            const el = document.getElementById('gpsPerm');
+            if (!el) return;
+            if (!navigator.permissions) {
+                el.innerHTML = '⚠️ Permissions API not available in this browser.';
+                return;
+            }
+            navigator.permissions.query({ name: 'geolocation' }).then(result => {
+                const stateMap = {
+                    granted: '🟢 <strong style="color:var(--accent-green)">Granted</strong> — GPS will work without prompts.',
+                    denied:  '🔴 <strong style="color:#fca5a5">Denied</strong> — Reset location permissions in your browser settings for this page.',
+                    prompt:  '🟡 <strong style="color:var(--accent-orange)">Will prompt</strong> — The browser will ask each session. Install as a PWA to persist this.',
+                };
+                el.innerHTML = stateMap[result.state] || result.state;
+                result.onchange = () => { checkGPSPermission(); };
+            }).catch(() => {
+                el.innerHTML = '⚠️ Could not query permission state.';
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', initializeMap);
+    </script>
+</body>
+</html>
