@@ -693,11 +693,6 @@
         }
         .qlb-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
         .qlb-btn.on { background:rgba(59,158,255,0.18); color:var(--accent-blue); border-color:rgba(59,158,255,0.45); }
-        .qlb-btn.on.type-drilled { background:rgba(247,168,0,0.18); color:var(--accent-orange); border-color:rgba(247,168,0,0.4); }
-        .qlb-btn.on.type-hole   { background:rgba(46,204,113,0.18); color:var(--accent-green);  border-color:rgba(46,204,113,0.4); }
-        .qlb-btn.on.type-log    { background:rgba(155,89,182,0.18); color:#c39bd3;               border-color:rgba(155,89,182,0.4); }
-        .qlb-btn.on.type-samp   { background:rgba(231,76,60,0.18);  color:#fca5a5;               border-color:rgba(231,76,60,0.4); }
-        .qlb-btn.on.type-markup { background:rgba(59,158,255,0.18); color:var(--accent-blue);    border-color:rgba(59,158,255,0.4); }
         .qlb-btn:active { opacity: 0.75; }
 
         
@@ -1118,11 +1113,7 @@
         
         <div id="quickLayerBar" style="display:none;">
             <div class="qlb-section-label">Layers</div>
-            <button class="qlb-btn type-drilled" id="qlb-DRILLED" onclick="quickLayerToggle('DRILLED')" title="Toggle all DRILLED layers">Drilled</button>
-            <button class="qlb-btn type-hole"    id="qlb-HOLE"    onclick="quickLayerToggle('HOLE')"    title="Toggle all HOLE layers">Hole</button>
-            <button class="qlb-btn type-log"     id="qlb-LOG"     onclick="quickLayerToggle('LOG')"     title="Toggle all LOG layers">Log</button>
-            <button class="qlb-btn type-samp"    id="qlb-SAMP"    onclick="quickLayerToggle('SAMP')"    title="Toggle all SAMP layers">Samp</button>
-            <button class="qlb-btn type-markup"  id="qlb-MARKUP"  onclick="quickLayerToggle('MARKUP')"  title="Toggle markup layers">Markup</button>
+            <button class="qlb-btn" id="qlb-MARKUP" onclick="quickLayerToggle('MARKUP')" title="Toggle markup layers">Markup</button>
         </div>
     </div>
 
@@ -1288,7 +1279,7 @@
                 </p>
                 <div id="tileCacheCount" style="font-size:11px; color:var(--accent-blue); margin-bottom:8px;">Checking cache…</div>
                 <button id="cacheAreaBtn" onclick="cacheCurrentView()">
-                    🗺 Cache Current View (Zooms 10–17)
+                    🗺 Cache Current View (Zooms <span id="cacheZoomLabel">10–17</span>)
                 </button>
                 <button id="clearCacheBtn" onclick="clearTileCache()" style="background:transparent; border:1px solid var(--border); color:var(--accent-red); padding:7px 12px; border-radius:var(--radius); font-size:11px; font-weight:600; cursor:pointer; width:100%;">
                     🗑 Clear Tile Cache
@@ -1361,6 +1352,21 @@
                 <h4>GPS</h4>
                 <label>Accuracy threshold (m) — warn if worse than this</label>
                 <input type="number" id="settingsGpsAcc" min="1" max="500" step="1" placeholder="15" />
+            </div>
+
+            <div class="panel-section">
+                <h4>Tile Cache Zoom Range</h4>
+                <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;line-height:1.5;">Controls which zoom levels are cached when you tap <em>Cache Current View</em>. Higher max zoom = more tiles = more storage.</p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <div>
+                        <label style="margin-bottom:2px;">Min zoom</label>
+                        <input type="number" id="settingsCacheMinZoom" min="1" max="22" step="1" placeholder="10" style="margin-bottom:0;" />
+                    </div>
+                    <div>
+                        <label style="margin-bottom:2px;">Max zoom</label>
+                        <input type="number" id="settingsCacheMaxZoom" min="1" max="22" step="1" placeholder="17" style="margin-bottom:0;" />
+                    </div>
+                </div>
             </div>
 
             <div class="panel-section">
@@ -1470,6 +1476,8 @@
             holeLabelSize: 12,
             tapSlop: 20,
             eraseHitPx: 30,
+            cacheMinZoom: 10,
+            cacheMaxZoom: 17,
         };
 
         function getCoordE() { return appSettings.coordinateE || 'Longitude'; }
@@ -1670,6 +1678,8 @@
 
             applyProjection();
             currentHoleLabelSize = (appSettings.holeLabelSize || 12) + 'px';
+            const czl = document.getElementById('cacheZoomLabel');
+            if (czl) czl.textContent = `${appSettings.cacheMinZoom ?? 10}–${appSettings.cacheMaxZoom ?? 17}`;
 
             
             
@@ -1836,7 +1846,7 @@
             }
 
             const [minX, minY, maxX, maxY] = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
-            const MIN_ZOOM = 10, MAX_ZOOM = 17;
+            const MIN_ZOOM = appSettings.cacheMinZoom ?? 10, MAX_ZOOM = appSettings.cacheMaxZoom ?? 17;
             const tileUrls = [];
 
             for (let z = MIN_ZOOM; z <= MAX_ZOOM; z++) {
@@ -2127,6 +2137,10 @@
             document.getElementById('settingsMarkupE').value   = appSettings.markupEasting  || 'Longitude';
             document.getElementById('settingsMarkupN').value   = appSettings.markupNorthing || 'Latitude';
             document.getElementById('settingsGpsAcc').value    = appSettings.gpsAccuracyThreshold ?? 15;
+            document.getElementById('settingsCacheMinZoom').value = appSettings.cacheMinZoom ?? 10;
+            document.getElementById('settingsCacheMaxZoom').value = appSettings.cacheMaxZoom ?? 17;
+            const czl = document.getElementById('cacheZoomLabel');
+            if (czl) czl.textContent = `${appSettings.cacheMinZoom ?? 10}–${appSettings.cacheMaxZoom ?? 17}`;
             const labelSize = appSettings.holeLabelSize ?? 12;
             document.getElementById('settingsLabelSize').value = labelSize;
             document.getElementById('settingsLabelSizeVal').textContent = labelSize + 'px';
@@ -2156,6 +2170,8 @@
                 markupEasting:  appSettings.markupEasting,
                 markupNorthing: appSettings.markupNorthing,
                 gpsAccuracyThreshold: appSettings.gpsAccuracyThreshold,
+                cacheMinZoom: appSettings.cacheMinZoom,
+                cacheMaxZoom: appSettings.cacheMaxZoom,
                 holeLabelSize: appSettings.holeLabelSize,
                 tapSlop:    appSettings.tapSlop,
                 eraseHitPx: appSettings.eraseHitPx,
@@ -2193,6 +2209,8 @@
                     if (data.projectionCode !== undefined) appSettings.projectionCode = data.projectionCode;
                     if (data.proj4String    !== undefined) appSettings.proj4String    = data.proj4String;
                     if (data.gpsAccuracyThreshold !== undefined) appSettings.gpsAccuracyThreshold = data.gpsAccuracyThreshold;
+                    if (data.cacheMinZoom !== undefined) appSettings.cacheMinZoom = data.cacheMinZoom;
+                    if (data.cacheMaxZoom !== undefined) appSettings.cacheMaxZoom = data.cacheMaxZoom;
                     if (data.holeLabelSize !== undefined) appSettings.holeLabelSize = data.holeLabelSize;
                     if (data.tapSlop    !== undefined) appSettings.tapSlop    = data.tapSlop;
                     if (data.eraseHitPx !== undefined) appSettings.eraseHitPx = data.eraseHitPx;
@@ -2915,38 +2933,52 @@
 
         function updateQuickLayerBar() {
             const bar = document.getElementById('quickLayerBar');
+            if (!bar) return;
             const drillLayers = drillDataLayerGroup.getLayers().getArray();
-            const hasDrill = drillLayers.length > 0;
-            if (bar) bar.style.display = hasDrill ? 'flex' : 'none';
 
+            // Remove all dynamic buttons (everything except section label and markup btn)
+            Array.from(bar.querySelectorAll('.qlb-btn:not(#qlb-MARKUP)')).forEach(b => b.remove());
+
+            // Rebuild one button per configured layer type
             appSettings.layerTypes.forEach(typeCfg => {
-                let btn = document.getElementById('qlb-' + typeCfg.id);
-                if (!btn) {
-                    btn = document.createElement('button');
-                    btn.id = 'qlb-' + typeCfg.id;
-                    btn.className = 'qlb-btn';
-                    btn.title = 'Toggle ' + typeCfg.id + ' layers';
-                    btn.onclick = function() { quickLayerToggle(typeCfg.id); };
-                    const qlbBar = document.getElementById('quickLayerBar');
-                    if (qlbBar) qlbBar.appendChild(btn);
-                }
                 const matching = drillLayers.filter(l => l.get('dataType') === typeCfg.id);
-                btn.style.display = matching.length === 0 ? 'none' : '';
+                if (matching.length === 0) return;
+
+                const btn = document.createElement('button');
+                btn.id = 'qlb-' + typeCfg.id;
+                btn.className = 'qlb-btn';
+                btn.title = 'Toggle ' + typeCfg.keyword + ' layers';
                 btn.textContent = typeCfg.keyword;
-                btn.style.color = typeCfg.color;
-                btn.style.borderColor = matching.some(l => l.getVisible()) ? typeCfg.color : 'var(--border)';
-                btn.style.background = matching.some(l => l.getVisible()) ? typeCfg.color + '30' : 'rgba(255,255,255,0.05)';
+
+                const anyVisible = matching.some(l => l.getVisible());
+                btn.style.color = anyVisible ? typeCfg.color : 'var(--text-muted)';
+                btn.style.borderColor = anyVisible ? typeCfg.color : 'var(--border)';
+                btn.style.background = anyVisible
+                    ? typeCfg.color + '28'
+                    : 'rgba(255,255,255,0.05)';
+                btn.onclick = function() { quickLayerToggle(typeCfg.id); };
+
+                // Insert before markup button
+                const markupBtn = document.getElementById('qlb-MARKUP');
+                bar.insertBefore(btn, markupBtn);
             });
 
+            // Show/hide bar based on whether any drill layers exist
+            const hasDrill = drillLayers.length > 0;
             const liveMarkupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
             const importedMarkupLayers = drillLayers.filter(l => l.get('dataType') === 'MARKUP');
+            const hasAnyMarkup = liveMarkupLayer || importedMarkupLayers.length > 0;
+            bar.style.display = (hasDrill || hasAnyMarkup) ? 'flex' : 'none';
+
+            // Update markup button
             const markupBtn = document.getElementById('qlb-MARKUP');
             if (markupBtn) {
-                const hasAnyMarkup = liveMarkupLayer || importedMarkupLayers.length > 0;
                 markupBtn.style.display = hasAnyMarkup ? '' : 'none';
                 const anyMarkupVisible = (liveMarkupLayer && liveMarkupLayer.getVisible()) ||
                     importedMarkupLayers.some(l => l.getVisible());
-                markupBtn.classList.toggle('on', anyMarkupVisible);
+                markupBtn.style.color = anyMarkupVisible ? 'var(--accent-blue)' : 'var(--text-muted)';
+                markupBtn.style.borderColor = anyMarkupVisible ? 'rgba(59,158,255,0.45)' : 'var(--border)';
+                markupBtn.style.background = anyMarkupVisible ? 'rgba(59,158,255,0.18)' : 'rgba(255,255,255,0.05)';
             }
         }
 
@@ -3206,6 +3238,8 @@
                     if (s.projectionCode !== undefined) appSettings.projectionCode = s.projectionCode;
                     if (s.proj4String    !== undefined) appSettings.proj4String    = s.proj4String;
                     if (s.gpsAccuracyThreshold !== undefined) appSettings.gpsAccuracyThreshold = s.gpsAccuracyThreshold;
+                    if (s.cacheMinZoom !== undefined) appSettings.cacheMinZoom = s.cacheMinZoom;
+                    if (s.cacheMaxZoom !== undefined) appSettings.cacheMaxZoom = s.cacheMaxZoom;
                     if (s.holeLabelSize !== undefined) appSettings.holeLabelSize = s.holeLabelSize;
                     if (s.tapSlop    !== undefined) appSettings.tapSlop    = s.tapSlop;
                     if (s.eraseHitPx !== undefined) appSettings.eraseHitPx = s.eraseHitPx;
@@ -3231,6 +3265,10 @@
             appSettings.projectionCode = document.getElementById('settingsProjCode').value.trim() || 'EPSG:4326';
             appSettings.proj4String    = document.getElementById('settingsProj4').value.trim() || '';
             appSettings.gpsAccuracyThreshold = parseFloat(document.getElementById('settingsGpsAcc').value) || 15;
+            appSettings.cacheMinZoom = parseInt(document.getElementById('settingsCacheMinZoom').value) || 10;
+            appSettings.cacheMaxZoom = parseInt(document.getElementById('settingsCacheMaxZoom').value) || 17;
+            const czl = document.getElementById('cacheZoomLabel');
+            if (czl) czl.textContent = `${appSettings.cacheMinZoom}–${appSettings.cacheMaxZoom}`;
             appSettings.holeLabelSize = parseInt(document.getElementById('settingsLabelSize').value) || 12;
             appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 20;
             appSettings.eraseHitPx = parseInt(document.getElementById('settingsEraseHit').value) || 30;
@@ -3280,6 +3318,8 @@
             appSettings.projectionCode = 'EPSG:4326';
             appSettings.proj4String    = '+proj=longlat +datum=WGS84 +no_defs +type=crs';
             appSettings.gpsAccuracyThreshold = 15;
+            appSettings.cacheMinZoom = 10;
+            appSettings.cacheMaxZoom = 17;
             appSettings.holeLabelSize = 12;
             appSettings.tapSlop   = 20;
             appSettings.eraseHitPx = 30;
