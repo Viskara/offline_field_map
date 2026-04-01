@@ -1675,28 +1675,24 @@
             
             
             const greyCanvasSource = new ol.source.XYZ({
-                tileLoadFunction: function(tile) {
+                tileLoadFunction: function(imageTile) {
                     const canvas = document.createElement('canvas');
                     canvas.width = 256; canvas.height = 256;
                     const ctx = canvas.getContext('2d');
-                    
                     ctx.fillStyle = '#d6d8db';
                     ctx.fillRect(0, 0, 256, 256);
-                    
                     ctx.strokeStyle = 'rgba(160,163,168,0.6)';
                     ctx.lineWidth = 0.5;
-                    const step = 32;
-                    for (let i = 0; i <= 256; i += step) {
+                    for (let i = 0; i <= 256; i += 32) {
                         ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
                         ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
                     }
-                    
                     ctx.strokeStyle = 'rgba(140,143,148,0.45)';
                     ctx.lineWidth = 1;
                     ctx.strokeRect(0, 0, 256, 256);
-                    tile.getImage().src = canvas.toDataURL();
+                    imageTile.getImage().src = canvas.toDataURL();
                 },
-                url: '{z}/{x}/{y}'
+                url: 'https://example.com/grey/{z}/{x}/{y}.png'
             });
             const greyLayer = new ol.layer.Tile({
                 title: 'Grey Canvas', type: 'base',
@@ -2542,9 +2538,14 @@
                 button.onclick = () => {
                     baseLayers.forEach(l => l.setVisible(false));
                     layer.setVisible(true);
+                    const src = layer.getSource();
+                    if (src) {
+                        if (src.refresh) src.refresh();
+                        else layer.changed();
+                    }
+                    map.render();
                     document.querySelectorAll('#lsMenu button').forEach(b => b.classList.remove('active'));
                     button.classList.add('active');
-                    
                     lsMenuOpen = false;
                     document.getElementById('lsMenu').classList.remove('open');
                     document.getElementById('lsBurger').classList.remove('open');
