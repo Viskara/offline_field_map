@@ -1,10 +1,13 @@
-const CACHE_NAME = 'field-map-v1';
+const CACHE_NAME = 'field-map-v2';
 const TILE_CACHE = 'field-map-tiles-v1';
 
 const APP_SHELL = [
-  './',
   './index.html',
+  './offline.html',
   './manifest.json',
+  './sw.js',
+  './icon-48.png',
+  './icon-96.png',
   './icon-192.png',
   './icon-512.png',
   'https://cdn.jsdelivr.net/npm/ol@v8.2.0/ol.css',
@@ -13,27 +16,28 @@ const APP_SHELL = [
   'https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js',
 ];
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL).catch(() => {}))
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(APP_SHELL).catch(() => {}))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
+self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys
         .filter(k => k !== CACHE_NAME && k !== TILE_CACHE)
         .map(k => caches.delete(k))
       )
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('fetch', event => {
   const url = event.request.url;
+  const isNavigation = event.request.mode === 'navigate';
 
   const isTile = /\/\d+\/\d+\/\d+\.(png|jpg|jpeg)/.test(url) ||
                  url.includes('tile.openstreetmap') ||
@@ -66,7 +70,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (APP_SHELL.some(u => url.endsWith(u) || url === u)) {
+  if (isNavigation) {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -74,13 +78,31 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
           return response;
         })
-        .catch(() => caches.match(event.request))
+        .catch(() =>
+          caches.match('./index.html')
+            .then(cached => cached || caches.match('./offline.html'))
+        )
     );
     return;
   }
+
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      if (cached) return cached;
+      return fetch(event.request)
+        .then(response => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match('./offline.html'));
+    })
+  );
 });
 
-self.addEventListener('message', async (event) => {
+self.addEventListener('message', async event => {
   if (event.data.type === 'CACHE_TILES') {
     const { urls } = event.data;
     const cache = await caches.open(TILE_CACHE);
