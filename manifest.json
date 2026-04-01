@@ -76,13 +76,5 @@
         }
       ]
     }
-  ],
-  "permissions": [
-    "notifications",
-    "background-sync",
-    "periodic-background-sync"
-  ],
-  "background_sync": {
-    "tag": "sync-data"
-  }
+  ]
 }
