@@ -1,4 +1,4 @@
-const CACHE = "field-map-v1";
+const CACHE = "field-map-v2";
 const TILE_CACHE = "field-map-tiles-v1";
 const OFFLINE_PAGE = "offline.html";
 
@@ -20,6 +20,7 @@ const APP_SHELL = [
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+    return;
   }
   if (event.data && event.data.type === "CACHE_TILES") {
     handleCacheTiles(event);
