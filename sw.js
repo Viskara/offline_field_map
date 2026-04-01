@@ -66,21 +66,14 @@ self.addEventListener("fetch", (event) => {
       caches.open(TILE_CACHE).then((cache) =>
         cache.match(event.request).then((cached) => {
           if (cached) return cached;
-          return fetch(event.request, { mode: "no-cors" })
-            .then((response) => {
-              if (response && (response.status === 200 || response.type === "opaque")) {
-                cache.put(event.request, response.clone());
-              }
-              return response;
-            })
-            .catch(() => new Response(
-              new Uint8Array([
-                137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,
-                8,2,0,0,0,144,119,83,222,0,0,0,12,73,68,65,84,8,215,99,136,136,
-                136,0,0,0,4,0,1,166,246,119,15,0,0,0,0,73,69,78,68,174,66,96,130
-              ]).buffer,
-              { headers: { "Content-Type": "image/png" } }
-            ));
+          return fetch(event.request).catch(() => new Response(
+            new Uint8Array([
+              137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,
+              8,2,0,0,0,144,119,83,222,0,0,0,12,73,68,65,84,8,215,99,136,136,
+              136,0,0,0,4,0,1,166,246,119,15,0,0,0,0,73,69,78,68,174,66,96,130
+            ]).buffer,
+            { headers: { "Content-Type": "image/png" } }
+          ));
         })
       )
     );
@@ -97,9 +90,9 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(async () => {
           const cache = await caches.open(CACHE);
-          const cached = await cache.match("./index.html")
-            || await cache.match("./offline.html");
-          return cached || new Response("Offline", { status: 503 });
+          return await cache.match("./index.html")
+            || await cache.match("./offline.html")
+            || new Response("Offline", { status: 503 });
         })
     );
     return;
