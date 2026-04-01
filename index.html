@@ -814,7 +814,13 @@
             box-shadow: 0 4px 16px rgba(0,0,0,0.4);
             animation: toastIn 0.3s ease forwards;
             white-space: nowrap;
+            pointer-events: none;
         }
+        .toast.clickable {
+            pointer-events: auto;
+            cursor: pointer;
+        }
+        .toast.clickable:hover { opacity: 0.85; }
         .toast.success { border-color: rgba(46, 204, 113, 0.5); color: #6ee7b7; }
         .toast.warning { border-color: rgba(247, 168, 0, 0.5); color: var(--accent-orange); }
         .toast.error { border-color: rgba(231, 76, 60, 0.5); color: #fca5a5; }
@@ -832,6 +838,37 @@
                 .then(reg => {
                     reg.update();
                     navigator.serviceWorker.addEventListener('message', handleSWMessage);
+
+                    const showUpdateToast = () => {
+                        const toast = showToast('', 'success', 0);
+                        toast.className += ' clickable';
+                        toast.innerHTML = '🔄 Update available &nbsp;<strong>Tap to reload</strong>';
+                        toast.onclick = () => {
+                            if (reg.waiting) {
+                                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                            }
+                            window.location.reload();
+                        };
+                    };
+
+                    if (reg.waiting) {
+                        showUpdateToast();
+                    }
+
+                    reg.addEventListener('updatefound', () => {
+                        const newSW = reg.installing;
+                        if (!newSW) return;
+                        newSW.addEventListener('statechange', () => {
+                            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                                showUpdateToast();
+                            }
+                        });
+                    });
+
+                    let refreshing = false;
+                    navigator.serviceWorker.addEventListener('controllerchange', () => {
+                        if (!refreshing) { refreshing = true; window.location.reload(); }
+                    });
                 })
                 .catch(() => {});
         }
