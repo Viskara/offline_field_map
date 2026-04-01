@@ -1366,7 +1366,12 @@
             <div class="panel-section">
                 <h4>Display</h4>
                 <label>Label size (px)</label>
-                <input type="number" id="settingsLabelSize" min="6" max="32" step="1" placeholder="12" />
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <input type="range" id="settingsLabelSize" min="6" max="32" step="1"
+                        style="flex:1;margin-bottom:0;"
+                        oninput="updateHoleLabelSize(this.value); document.getElementById('settingsLabelSizeVal').textContent=this.value+'px'; const lm=document.getElementById('holeLabelSize'); if(lm){lm.value=this.value;}">
+                    <span id="settingsLabelSizeVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
+                </div>
                 <label>Marker tap tolerance (px) — how much you can move before a tap becomes a pan</label>
                 <div style="display:flex;align-items:center;gap:10px;">
                     <input type="range" id="settingsTapSlop" min="2" max="40" step="1" style="flex:1;margin-bottom:0;" oninput="document.getElementById('settingsTapSlopVal').textContent=this.value+'px'">
@@ -1463,7 +1468,7 @@
             proj4String: '+proj=longlat +datum=WGS84 +no_defs +type=crs',
             gpsAccuracyThreshold: 15,
             holeLabelSize: 12,
-            tapSlop: 8,
+            tapSlop: 20,
             eraseHitPx: 30,
         };
 
@@ -1923,7 +1928,7 @@
         
         
         
-        function getTapSlop() { return appSettings.tapSlop ?? 8; }
+        function getTapSlop() { return appSettings.tapSlop ?? 20; }
         function getEraseHitPx() { return appSettings.eraseHitPx ?? 30; }
         let _tapPointerId = null, _tapStartX = 0, _tapStartY = 0, _tapMoved = false;
         let _tapPointerDownHandler = null, _tapPointerMoveHandler = null, _tapPointerUpHandler = null;
@@ -2126,8 +2131,12 @@
             document.getElementById('settingsMarkupE').value   = appSettings.markupEasting  || 'Longitude';
             document.getElementById('settingsMarkupN').value   = appSettings.markupNorthing || 'Latitude';
             document.getElementById('settingsGpsAcc').value    = appSettings.gpsAccuracyThreshold ?? 15;
-            document.getElementById('settingsLabelSize').value = appSettings.holeLabelSize  ?? 12;
-            const tapSlop = appSettings.tapSlop ?? 8;
+            const labelSize = appSettings.holeLabelSize ?? 12;
+            document.getElementById('settingsLabelSize').value = labelSize;
+            document.getElementById('settingsLabelSizeVal').textContent = labelSize + 'px';
+            const lmSlider = document.getElementById('holeLabelSize');
+            if (lmSlider) lmSlider.value = labelSize;
+            const tapSlop = appSettings.tapSlop ?? 20;
             const eraseHit = appSettings.eraseHitPx ?? 30;
             document.getElementById('settingsTapSlop').value = tapSlop;
             document.getElementById('settingsTapSlopVal').textContent = tapSlop + 'px';
@@ -2764,7 +2773,7 @@
             listDiv.innerHTML = `
                 <div style="padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px;">
                     <label for="holeLabelSize">Label Size (${currentHoleLabelSize}):</label>
-                    <input type="range" id="holeLabelSize" min="8" max="20" value="${parseInt(currentHoleLabelSize)}" oninput="updateHoleLabelSize(this.value)" style="width:100%; margin:4px 0 0; padding:0; background:transparent; border:none;">
+                    <input type="range" id="holeLabelSize" min="6" max="32" value="${parseInt(currentHoleLabelSize)}" oninput="updateHoleLabelSize(this.value); const sv=document.getElementById('settingsLabelSize'); if(sv){sv.value=this.value; const vl=document.getElementById('settingsLabelSizeVal'); if(vl) vl.textContent=this.value+'px';}" style="width:100%; margin:4px 0 0; padding:0; background:transparent; border:none;">
                 </div>
             `;
 
@@ -3222,7 +3231,7 @@
             appSettings.proj4String    = document.getElementById('settingsProj4').value.trim() || '';
             appSettings.gpsAccuracyThreshold = parseFloat(document.getElementById('settingsGpsAcc').value) || 15;
             appSettings.holeLabelSize = parseInt(document.getElementById('settingsLabelSize').value) || 12;
-            appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 8;
+            appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 20;
             appSettings.eraseHitPx = parseInt(document.getElementById('settingsEraseHit').value) || 30;
 
             const rows = document.querySelectorAll('.settings-type-row[data-typeid]');
@@ -3271,7 +3280,7 @@
             appSettings.proj4String    = '+proj=longlat +datum=WGS84 +no_defs +type=crs';
             appSettings.gpsAccuracyThreshold = 15;
             appSettings.holeLabelSize = 12;
-            appSettings.tapSlop   = 8;
+            appSettings.tapSlop   = 20;
             appSettings.eraseHitPx = 30;
             persistSettings();
             populateSettingsPanel();
