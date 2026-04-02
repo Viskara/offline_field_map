@@ -1603,7 +1603,7 @@
             }
         }
 
-        // ─── Import Folder Browser (FSA) ─────────────────────────────────────────
+        // ─── Import Folder Browser (FSA) — modal ─────────────────────────────────
 
         async function saveImportFolderHandle(handle) {
             if (!db) return;
@@ -1623,97 +1623,174 @@
             });
         }
 
-        async function updateImportFolderUI() {
-            const fsaOk = ('showDirectoryPicker' in window);
-            const unsup = document.getElementById('importFolderUnsupported');
-            if (unsup) unsup.style.display = fsaOk ? 'none' : 'block';
-
-            const handle = await loadImportFolderHandle().catch(() => null);
-            const rootEl = document.getElementById('importRootName');
-            const subPanel = document.getElementById('importSubfolderPanel');
-
-            if (rootEl) {
-                rootEl.textContent = handle ? `📁 ${handle.name}` : 'No root folder chosen';
-                rootEl.style.color = handle ? 'var(--accent-green)' : 'var(--text-muted)';
-            }
-            if (subPanel) subPanel.style.display = handle ? 'block' : 'none';
-            if (handle) await refreshImportSubfolderList(handle);
-        }
-
-        async function refreshImportSubfolderList(handle) {
-            const listEl = document.getElementById('importSubfolderList');
-            if (!listEl) return;
-            listEl.innerHTML = '<div style="font-size:10px;color:var(--text-muted);padding:4px;">Scanning…</div>';
-
-            let subs = [], fromCache = false;
+        // Scan subfolders from a directory handle (read permission)
+        async function scanImportSubfolders(rootHandle) {
             try {
-                const perm = await handle.queryPermission({ mode: 'read' });
-                if (perm !== 'granted') await handle.requestPermission({ mode: 'read' });
-                for await (const [name, h] of handle.entries()) {
-                    if (h.kind === 'directory') subs.push({ name, h });
+                const perm = await rootHandle.queryPermission({ mode: 'read' });
+                if (perm !== 'granted') {
+                    const req = await rootHandle.requestPermission({ mode: 'read' });
+                    if (req !== 'granted') throw new Error('permission denied');
+                }
+                const subs = [];
+                for await (const [name, h] of rootHandle.entries()) {
+                    if (h.kind === 'directory') subs.push({ name, handle: h });
                 }
                 subs.sort((a, b) => a.name.localeCompare(b.name));
+                return { subs, fromCache: false };
             } catch {
-                fromCache = true;
+                return { subs: [], fromCache: true };
             }
+        }
 
-            listEl.innerHTML = '';
+        // Show the import folder picker modal — returns a directory handle or null
+        function showImportFolderModal(rootHandle, subs, fromCache) {
+            return new Promise(resolve => {
+                const existing = document.getElementById('importPickerModal');
+                if (existing) existing.remove();
 
-            if (fromCache) {
-                const notice = document.createElement('div');
-                notice.style.cssText = 'font-size:10px;color:var(--accent-orange);padding:5px 8px;margin-bottom:6px;background:rgba(247,168,0,0.08);border:1px solid rgba(247,168,0,0.2);border-radius:4px;';
-                notice.textContent = '📵 Folder unreachable — cannot browse subfolders';
-                listEl.appendChild(notice);
-                return;
-            }
+                const modal = document.createElement('div');
+                modal.id = 'importPickerModal';
+                modal.style.cssText = `
+                    position:fixed;inset:0;z-index:4000;
+                    background:rgba(10,14,26,0.75);backdrop-filter:blur(4px);
+                    display:flex;align-items:center;justify-content:center;padding:20px;
+                `;
 
-            // Root folder option
-            listEl.appendChild(_makeImportFolderBtn(`📁 ${handle.name}  (root)`, async () => {
-                await loadCSVsFromDirectoryHandle(handle, handle.name);
-            }));
+                const dialog = document.createElement('div');
+                dialog.style.cssText = `
+                    background:#111827;border:1px solid rgba(255,255,255,0.1);
+                    border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.7);
+                    width:min(400px,100%);display:flex;flex-direction:column;
+                    overflow:hidden;font-family:var(--font);
+                `;
 
-            if (subs.length === 0) {
-                const empty = document.createElement('div');
-                empty.style.cssText = 'font-size:10px;color:var(--text-muted);padding:4px;';
-                empty.textContent = 'No subfolders found.';
-                listEl.appendChild(empty);
-                return;
-            }
+                // Header
+                const header = document.createElement('div');
+                header.style.cssText = 'padding:16px 20px 12px;border-bottom:1px solid rgba(255,255,255,0.08);';
+                header.innerHTML = `
+                    <div style="font-size:14px;font-weight:700;color:#e8edf5;margin-bottom:3px;">📂 Import from Folder</div>
+                    <div style="font-size:11px;color:#8899aa;">Choose a folder inside <strong style="color:#e8edf5;">${rootHandle.name}</strong> to load its CSVs</div>
+                    ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;">📵 Folder unreachable — cannot browse subfolders</div>' : ''}
+                `;
 
-            subs.forEach(({ name, h }) => {
-                listEl.appendChild(_makeImportFolderBtn(`📂 ${name}`, async () => {
-                    await loadCSVsFromDirectoryHandle(h, name);
-                }));
+                // List
+                const list = document.createElement('div');
+                list.style.cssText = 'padding:10px 12px;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
+
+                const makeBtn = (label, dirHandle) => {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `
+                        display:block;width:100%;text-align:left;
+                        padding:9px 12px;margin-bottom:5px;
+                        background:rgba(255,255,255,0.03);
+                        border:1px solid rgba(255,255,255,0.08);
+                        border-radius:7px;cursor:pointer;
+                        font-size:13px;font-family:var(--font);font-weight:400;
+                        color:#8899aa;
+                        transition:background 0.12s,border-color 0.12s,color 0.12s;
+                    `;
+                    btn.textContent = label;
+                    btn.onmouseover = () => { btn.style.background='rgba(59,158,255,0.1)'; btn.style.borderColor='rgba(59,158,255,0.35)'; btn.style.color='#3b9eff'; };
+                    btn.onmouseout  = () => { btn.style.background='rgba(255,255,255,0.03)'; btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='#8899aa'; };
+                    btn.onclick = () => { modal.remove(); resolve(dirHandle); };
+                    return btn;
+                };
+
+                if (!fromCache) {
+                    // Root folder option
+                    list.appendChild(makeBtn(`📁 ${rootHandle.name}  (root)`, rootHandle));
+                    // Subfolders
+                    subs.forEach(({ name, handle }) => list.appendChild(makeBtn(`📂 ${name}`, handle)));
+                    if (subs.length === 0) {
+                        const empty = document.createElement('div');
+                        empty.style.cssText = 'font-size:12px;color:#8899aa;padding:8px 4px;';
+                        empty.textContent = 'No subfolders found — will load from root folder.';
+                        list.appendChild(empty);
+                    }
+                }
+
+                // Footer
+                const footer = document.createElement('div');
+                footer.style.cssText = 'padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
+
+                const changeBtn = document.createElement('button');
+                changeBtn.textContent = '📁 Change Root Folder';
+                changeBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                changeBtn.onclick = async () => {
+                    modal.remove();
+                    resolve('__change__');
+                };
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                cancelBtn.onclick = () => { modal.remove(); resolve(null); };
+
+                footer.appendChild(changeBtn);
+                footer.appendChild(cancelBtn);
+                dialog.appendChild(header);
+                dialog.appendChild(list);
+                dialog.appendChild(footer);
+                modal.appendChild(dialog);
+                modal.onclick = (e) => { if (e.target === modal) { modal.remove(); resolve(null); } };
+                document.body.appendChild(modal);
             });
         }
 
-        function _makeImportFolderBtn(label, onClick) {
-            const btn = document.createElement('button');
-            btn.textContent = label;
-            btn.style.cssText = `
-                display:block;width:100%;text-align:left;
-                padding:7px 9px;margin-bottom:4px;
-                background:rgba(255,255,255,0.03);
-                border:1px solid rgba(255,255,255,0.08);
-                border-radius:5px;cursor:pointer;
-                font-size:11px;font-family:var(--font);color:var(--text-muted);
-                transition:background 0.12s,color 0.12s;
-            `;
-            btn.onmouseover = () => { btn.style.background='rgba(255,255,255,0.08)'; btn.style.color='var(--text-primary)'; };
-            btn.onmouseout  = () => { btn.style.background='rgba(255,255,255,0.03)'; btn.style.color='var(--text-muted)'; };
-            btn.onclick = onClick;
-            return btn;
-        }
+        window.openImportFolderModal = async function() {
+            if (!('showDirectoryPicker' in window)) {
+                showToast('⚠️ Not supported — use Chrome or Edge on desktop (installed PWA)', 'warning', 6000);
+                // Fall back to classic picker
+                document.getElementById('quickFolderPicker').click();
+                return;
+            }
 
-        async function loadCSVsFromDirectoryHandle(dirHandle, folderName) {
-            const statusEl = document.getElementById('quickFolderStatus');
-            if (statusEl) { statusEl.textContent = `Reading ${folderName}…`; }
+            let rootHandle = await loadImportFolderHandle().catch(() => null);
+
+            // If no root yet, or user wants to change — open the OS picker
+            if (!rootHandle) {
+                try {
+                    rootHandle = await window.showDirectoryPicker({ mode: 'read' });
+                    await saveImportFolderHandle(rootHandle);
+                } catch(err) {
+                    if (err.name !== 'AbortError')
+                        showToast(`❌ Folder picker failed: ${err.message || err.name}`, 'error', 6000);
+                    return;
+                }
+            }
+
+            // Scan subfolders and show modal
+            const { subs, fromCache } = await scanImportSubfolders(rootHandle);
+            const chosen = await showImportFolderModal(rootHandle, subs, fromCache);
+
+            if (chosen === '__change__') {
+                // User wants to pick a different root
+                try {
+                    rootHandle = await window.showDirectoryPicker({ mode: 'read' });
+                    await saveImportFolderHandle(rootHandle);
+                    const scan2 = await scanImportSubfolders(rootHandle);
+                    const chosen2 = await showImportFolderModal(rootHandle, scan2.subs, scan2.fromCache);
+                    if (!chosen2 || chosen2 === '__change__') return;
+                    await loadCSVsFromDirectoryHandle(chosen2, chosen2.name);
+                } catch(err) {
+                    if (err.name !== 'AbortError')
+                        showToast(`❌ Folder picker failed: ${err.message || err.name}`, 'error', 6000);
+                }
+                return;
+            }
+
+            if (!chosen) return; // cancelled
+            await loadCSVsFromDirectoryHandle(chosen, chosen.name);
+        };
+
+        async function loadCSVsFromDirectoryHandle(dirHandle, folderLabel) {
+            const statusEl = document.getElementById('importFolderStatus');
+            if (statusEl) statusEl.textContent = `Reading "${folderLabel}"…`;
             const files = [];
             try {
                 for await (const [name, h] of dirHandle.entries()) {
                     if (h.kind === 'file' && name.toLowerCase().endsWith('.csv')) {
-                        const file = await h.getFile();
-                        files.push(file);
+                        files.push(await h.getFile());
                     }
                 }
             } catch(err) {
@@ -1721,45 +1798,13 @@
                 return;
             }
             if (!files.length) {
-                if (statusEl) statusEl.textContent = `No CSV files found in ${folderName}`;
-                showToast(`⚠️ No CSV files in "${folderName}"`, 'warning');
+                if (statusEl) statusEl.textContent = `No CSV files found in "${folderLabel}"`;
+                showToast(`⚠️ No CSV files in "${folderLabel}"`, 'warning');
                 return;
             }
-            if (statusEl) statusEl.textContent = `Found ${files.length} CSV(s) in ${folderName} — loading…`;
+            if (statusEl) statusEl.textContent = `Found ${files.length} CSV(s) — loading…`;
             handleCSVUploadFiles(files, statusEl);
         }
-
-        window.chooseImportFolder = async function() {
-            if (!('showDirectoryPicker' in window)) {
-                showToast('⚠️ Not supported — use Chrome or Edge on desktop', 'warning', 5000);
-                return;
-            }
-            try {
-                const handle = await window.showDirectoryPicker({ mode: 'read' });
-                await saveImportFolderHandle(handle);
-                await updateImportFolderUI();
-                showToast(`✅ Import folder set: "${handle.name}"`, 'success');
-            } catch(err) {
-                if (err.name !== 'AbortError')
-                    showToast(`❌ Folder picker failed: ${err.message || err.name}`, 'error', 6000);
-            }
-        };
-
-        window.clearImportFolder = async function() {
-            if (!db) return;
-            await new Promise(res => {
-                const tx = db.transaction('settings', 'readwrite');
-                tx.objectStore('settings').delete('importFolderHandle');
-                tx.oncomplete = res; tx.onerror = res;
-            });
-            await updateImportFolderUI();
-            showToast('✕ Import folder cleared', 'warning');
-        };
-
-        window.refreshImportSubfolders = async function() {
-            const handle = await loadImportFolderHandle().catch(() => null);
-            if (handle) await refreshImportSubfolderList(handle);
-        };
 
         // ─── End Import Folder Browser ────────────────────────────────────────────
 
@@ -1946,31 +1991,17 @@
             </div>
 
             <!-- ── FSA Folder Browser ── -->
-            <div class="panel-section" id="importFolderSection">
+            <div class="panel-section">
                 <h4>Browse Folder</h4>
                 <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;line-height:1.5;">
-                    Pick a root folder once — then tap any subfolder to load its CSVs instantly. Remembered across sessions.
+                    Pick a root folder once, then choose a subfolder from the list to load its CSVs instantly.
                 </p>
-
-                <!-- Root name + buttons -->
-                <div id="importRootName" style="font-size:11px;font-family:var(--font-mono);padding:6px 9px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:var(--text-muted);margin-bottom:7px;word-break:break-all;">No root folder chosen</div>
-                <div style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-bottom:10px;">
-                    <button onclick="chooseImportFolder()" style="padding:7px 10px;background:#0369a1;border:none;border-radius:6px;color:white;font-size:11px;font-weight:600;font-family:var(--font);cursor:pointer;text-align:center;">📁 Choose Root Folder</button>
-                    <button onclick="clearImportFolder()" style="padding:7px 10px;background:transparent;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:var(--text-muted);font-size:11px;font-weight:600;font-family:var(--font);cursor:pointer;white-space:nowrap;">✕</button>
-                </div>
-
-                <!-- Subfolder list -->
-                <div id="importSubfolderPanel" style="display:none;">
-                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                        <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);">Subfolders</div>
-                        <button onclick="refreshImportSubfolders()" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:var(--text-muted);padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">↺</button>
-                    </div>
-                    <div id="importSubfolderList" style="max-height:200px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;"></div>
-                </div>
-
-                <div id="importFolderUnsupported" style="display:none;font-size:10px;color:var(--accent-orange);padding:6px 8px;background:rgba(247,168,0,0.08);border:1px solid rgba(247,168,0,0.2);border-radius:5px;line-height:1.5;margin-top:6px;">
-                    ⚠️ Folder browser requires Chrome or Edge on desktop (File System Access API).
-                </div>
+                <button onclick="openImportFolderModal()"
+                    style="width:100%;padding:10px;background:linear-gradient(135deg,#0f4c81,#1d6fd8);color:#fff;border:none;border-radius:var(--radius);font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                    Browse Folder
+                </button>
+                <div id="importFolderStatus" style="font-size:10px;color:var(--text-muted);margin-top:6px;font-family:var(--font-mono);line-height:1.7;"></div>
             </div>
 
             <hr>
@@ -3846,7 +3877,6 @@
                     document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
                 }
                 if (panelName === 'Manager') updateLayerListUI();
-                if (panelName === 'Import') updateImportFolderUI();
                 if (panelName === 'Offline') {
                     updateConnectionStatusCard();
                     updateTileCacheCount();
