@@ -1099,17 +1099,55 @@
             return new Promise((resolve) => {
                 const tx = db.transaction('settings', 'readwrite');
                 tx.objectStore('settings').delete('exportFolderHandle');
+                tx.objectStore('settings').delete('exportSubfolderName');
+                tx.objectStore('settings').delete('exportSubfolderCache');
                 tx.oncomplete = resolve;
                 tx.onerror = resolve;
             });
         }
 
-        // Queue a pending CSV copy (stores filename + CSV text content)
-        async function enqueueExportCopy(filename, csvText) {
+        // Persist/load the selected subfolder name (plain string)
+        async function saveExportSubfolderName(name) {
+            if (!db) return;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('settings', 'readwrite');
+                tx.objectStore('settings').put({ key: 'exportSubfolderName', value: name });
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function loadExportSubfolderName() {
+            if (!db) return null;
+            return new Promise((resolve) => {
+                const tx = db.transaction('settings', 'readonly');
+                const req = tx.objectStore('settings').get('exportSubfolderName');
+                req.onsuccess = () => resolve(req.result ? req.result.value : null);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        // Resolve which handle to actually write into (subfolder or root)
+        async function resolveWriteHandle(rootHandle) {
+            const subName = await loadExportSubfolderName();
+            if (!subName) return rootHandle;
+            try {
+                return await rootHandle.getDirectoryHandle(subName, { create: false });
+            } catch {
+                return rootHandle; // subfolder gone — fall back to root
+            }
+        }
+
+        // Queue a pending CSV copy — now includes subfolder name
+        async function enqueueExportCopy(filename, csvText, subfolderName) {
             if (!db) return;
             return new Promise((resolve, reject) => {
                 const tx = db.transaction('csvExportQueue', 'readwrite');
-                tx.objectStore('csvExportQueue').add({ filename, csvText, queuedAt: new Date().toISOString() });
+                tx.objectStore('csvExportQueue').add({
+                    filename, csvText,
+                    subfolderName: subfolderName || null,
+                    queuedAt: new Date().toISOString()
+                });
                 tx.oncomplete = resolve;
                 tx.onerror = () => reject(tx.error);
             });
@@ -1125,7 +1163,7 @@
             return dbGetAll('csvExportQueue');
         }
 
-        // Write a CSV text blob into the chosen directory handle
+        // Write a CSV text blob into a directory handle
         async function writeFileToHandle(dirHandle, filename, csvText) {
             const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
@@ -1145,15 +1183,107 @@
             }
         }
 
+        // List all subdirectories inside a root handle
+        // Save/load the cached subfolder list (plain string array) in IndexedDB
+        async function saveCachedSubfolders(names) {
+            if (!db) return;
+            return new Promise((resolve) => {
+                const tx = db.transaction('settings', 'readwrite');
+                tx.objectStore('settings').put({ key: 'exportSubfolderCache', value: names });
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+            });
+        }
+
+        async function loadCachedSubfolders() {
+            if (!db) return null;
+            return new Promise((resolve) => {
+                const tx = db.transaction('settings', 'readonly');
+                const req = tx.objectStore('settings').get('exportSubfolderCache');
+                req.onsuccess = () => resolve(req.result ? req.result.value : null);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        // Try live scan; on failure fall back to IndexedDB cache
+        async function listSubfolders(rootHandle) {
+            try {
+                const subs = [];
+                for await (const [name, handle] of rootHandle.entries()) {
+                    if (handle.kind === 'directory') subs.push(name);
+                }
+                subs.sort((a, b) => a.localeCompare(b));
+                // Persist successful scan so offline opens can use it
+                await saveCachedSubfolders(subs);
+                return { subs, fromCache: false };
+            } catch {
+                // Live scan failed — return whatever we cached last time
+                const cached = await loadCachedSubfolders();
+                return { subs: cached || [], fromCache: true };
+            }
+        }
+
+        async function refreshSubfolderList(rootHandle, selectedSub) {
+            const listEl = document.getElementById('exportSubfolderList');
+            if (!listEl) return;
+            listEl.innerHTML = '';
+
+            if (!rootHandle) return;
+
+            // Loading state
+            listEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">Scanning subfolders…</div>';
+
+            const { subs, fromCache } = await listSubfolders(rootHandle);
+
+            listEl.innerHTML = '';
+
+            // Offline/cache notice
+            if (fromCache) {
+                const notice = document.createElement('div');
+                notice.style.cssText = 'font-size:11px;color:var(--accent-orange);padding:6px 10px;margin-bottom:8px;background:rgba(247,168,0,0.08);border:1px solid rgba(247,168,0,0.2);border-radius:5px;line-height:1.5;';
+                notice.textContent = subs.length
+                    ? '📵 Folder unreachable — showing last known subfolders. Selection still works and exports will queue.'
+                    : '📵 Folder unreachable and no cached subfolders available. Exports will queue to the root folder.';
+                listEl.appendChild(notice);
+            }
+
+            // "Root (no subfolder)" option
+            const rootBtn = _makeSubfolderBtn('— Root folder (no subfolder)', !selectedSub, async () => {
+                await saveExportSubfolderName(null);
+                await updateExportFolderLabel();
+                showToast(`📁 Exporting to root: ${rootHandle.name}`, 'success');
+            });
+            listEl.appendChild(rootBtn);
+
+            if (subs.length === 0 && !fromCache) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:11px;color:var(--text-muted);padding:6px 4px;';
+                empty.textContent = 'No subfolders found inside this folder.';
+                listEl.appendChild(empty);
+                return;
+            }
+
+            subs.forEach(name => {
+                const btn = _makeSubfolderBtn(`📂 ${name}`, name === selectedSub, async () => {
+                    await saveExportSubfolderName(name);
+                    // Also update the cache entry to reflect this choice
+                    if (!subs.includes(name)) await saveCachedSubfolders([...subs, name].sort());
+                    await updateExportFolderLabel();
+                    showToast(`📂 Exporting to subfolder: ${name}`, 'success');
+                });
+                listEl.appendChild(btn);
+            });
+        }
+
         // Process all queued copies when online + handle available
         async function processExportQueue() {
             if (!navigator.onLine) return;
-            const dirHandle = await loadExportFolderHandle();
-            if (!dirHandle) return;
+            const rootHandle = await loadExportFolderHandle();
+            if (!rootHandle) return;
             const queue = await getAllQueuedExports();
             if (!queue.length) return;
 
-            const hasPermission = await verifyHandlePermission(dirHandle);
+            const hasPermission = await verifyHandlePermission(rootHandle);
             if (!hasPermission) {
                 showToast('⚠️ No permission for export folder — open Settings to reauthorise', 'warning', 6000);
                 return;
@@ -1162,7 +1292,15 @@
             let successCount = 0, failCount = 0;
             for (const item of queue) {
                 try {
-                    await writeFileToHandle(dirHandle, item.filename, item.csvText);
+                    let targetHandle = rootHandle;
+                    if (item.subfolderName) {
+                        try {
+                            targetHandle = await rootHandle.getDirectoryHandle(item.subfolderName, { create: false });
+                        } catch {
+                            targetHandle = rootHandle; // subfolder gone — write to root
+                        }
+                    }
+                    await writeFileToHandle(targetHandle, item.filename, item.csvText);
                     await dequeueExportItem(item.id);
                     successCount++;
                 } catch {
@@ -1174,7 +1312,7 @@
             if (failCount > 0)    showToast(`⚠️ ${failCount} CSV(s) failed to copy — will retry`, 'warning', 5000);
         }
 
-        // Called from settings panel to update the queue count badge
+        // Update the queue count badge
         async function updateExportQueueUI() {
             const el = document.getElementById('exportQueueCount');
             if (!el) return;
@@ -1188,17 +1326,101 @@
             }
         }
 
+        // Refresh the root folder label + subfolder list in the settings UI
         async function updateExportFolderLabel() {
-            const el = document.getElementById('exportFolderName');
-            if (!el) return;
-            const handle = await loadExportFolderHandle().catch(() => null);
-            if (handle) {
-                el.textContent = `📁 ${handle.name}`;
-                el.style.color = 'var(--accent-green)';
-            } else {
-                el.textContent = 'No folder chosen';
-                el.style.color = 'var(--text-muted)';
+            const rootHandle = await loadExportFolderHandle().catch(() => null);
+            const selectedSub = await loadExportSubfolderName().catch(() => null);
+
+            // Root label
+            const rootEl = document.getElementById('exportRootName');
+            if (rootEl) {
+                if (rootHandle) {
+                    rootEl.textContent = `📁 ${rootHandle.name}`;
+                    rootEl.style.color = 'var(--accent-green)';
+                } else {
+                    rootEl.textContent = 'No root folder chosen';
+                    rootEl.style.color = 'var(--text-muted)';
+                }
             }
+
+            // Subfolder panel visibility
+            const subPanel = document.getElementById('exportSubfolderPanel');
+            if (subPanel) subPanel.style.display = rootHandle ? 'block' : 'none';
+
+            // Active destination badge
+            const destEl = document.getElementById('exportDestBadge');
+            if (destEl) {
+                if (rootHandle) {
+                    const dest = selectedSub ? `${rootHandle.name} / ${selectedSub}` : rootHandle.name;
+                    destEl.textContent = `✦ Exporting to: ${dest}`;
+                    destEl.style.color = 'var(--accent-green)';
+                } else {
+                    destEl.textContent = '';
+                }
+            }
+
+            // Rebuild subfolder list
+            await refreshSubfolderList(rootHandle, selectedSub);
+        }
+
+        async function refreshSubfolderList(rootHandle, selectedSub) {
+            const listEl = document.getElementById('exportSubfolderList');
+            if (!listEl) return;
+            listEl.innerHTML = '';
+
+            if (!rootHandle) return;
+
+            // Loading state
+            listEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">Scanning subfolders…</div>';
+
+            const subs = await listSubfolders(rootHandle);
+
+            listEl.innerHTML = '';
+
+            // "Root (no subfolder)" option
+            const rootBtn = _makeSubfolderBtn('— Root folder (no subfolder)', !selectedSub, async () => {
+                await saveExportSubfolderName(null);
+                await updateExportFolderLabel();
+                showToast(`📁 Exporting to root: ${rootHandle.name}`, 'success');
+            });
+            listEl.appendChild(rootBtn);
+
+            if (subs.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:11px;color:var(--text-muted);padding:6px 4px;';
+                empty.textContent = 'No subfolders found inside this folder.';
+                listEl.appendChild(empty);
+                return;
+            }
+
+            subs.forEach(name => {
+                const btn = _makeSubfolderBtn(`📂 ${name}`, name === selectedSub, async () => {
+                    await saveExportSubfolderName(name);
+                    await updateExportFolderLabel();
+                    showToast(`📂 Exporting to subfolder: ${name}`, 'success');
+                });
+                listEl.appendChild(btn);
+            });
+        }
+
+        function _makeSubfolderBtn(label, isSelected, onClick) {
+            const btn = document.createElement('button');
+            btn.textContent = label;
+            btn.style.cssText = `
+                display:block; width:100%; text-align:left;
+                padding:8px 11px; margin-bottom:4px;
+                background:${isSelected ? 'rgba(59,158,255,0.15)' : 'rgba(255,255,255,0.03)'};
+                border:1px solid ${isSelected ? 'rgba(59,158,255,0.4)' : 'rgba(255,255,255,0.08)'};
+                border-radius:6px; cursor:pointer;
+                font-size:12px; font-family:var(--font);
+                color:${isSelected ? 'var(--accent-blue)' : 'var(--text-muted)'};
+                transition:background 0.15s, border-color 0.15s, color 0.15s;
+            `;
+            btn.onmouseover = () => { if (!btn.dataset.selected) { btn.style.background = 'rgba(255,255,255,0.07)'; btn.style.color = 'var(--text-primary)'; } };
+            btn.onmouseout  = () => { if (!btn.dataset.selected) { btn.style.background = 'rgba(255,255,255,0.03)'; btn.style.color = 'var(--text-muted)'; } };
+            if (isSelected) btn.dataset.selected = '1';
+            btn.onclick = onClick;
+            return btn;
         }
 
         // ─── End CSV Export Folder & Queue ───────────────────────────────────────
@@ -1733,27 +1955,52 @@
                 <div id="sTab-export" class="stab-pane" style="display:none;">
                     <div class="sg-grid2">
 
-                        <div class="scard" id="exportFolderSection">
-                            <div class="scard-title">📁 Export Folder</div>
+                        <div class="scard" id="exportFolderSection" style="grid-column:1/-1;">
+                            <div class="scard-title">📁 Export Destination</div>
                             <div class="scard-hint">
                                 Markups are always saved to <strong style="color:var(--text-primary);">Downloads</strong> first.
-                                Set a second destination folder below and the file will be copied there automatically.
-                                If you're offline, the copy is queued and retried when you reconnect.
+                                Pick a root folder once — then choose any subfolder inside it as the copy destination.
+                                If you're offline the copy is queued and retried automatically when you reconnect.
                             </div>
-                            <div id="exportFolderName" style="
-                                font-size:12px;font-family:var(--font-mono);
-                                padding:9px 12px;background:rgba(255,255,255,0.04);
-                                border:1px solid rgba(255,255,255,0.1);border-radius:6px;
-                                margin:12px 0 10px;color:var(--text-muted);">No folder chosen</div>
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
-                                <button class="action-button" style="background:#0369a1;margin:0;" onclick="chooseExportFolder()">📁 Choose Folder</button>
-                                <button class="action-button" style="background:#334155;border:1px solid var(--border);margin:0;" onclick="clearExportFolder()">✕ Clear Folder</button>
+
+                            <!-- Active destination badge -->
+                            <div id="exportDestBadge" style="
+                                font-size:12px;font-weight:600;margin:12px 0 0;
+                                min-height:18px;"></div>
+
+                            <!-- Root folder row -->
+                            <div style="display:flex;align-items:center;gap:8px;margin:10px 0 6px;">
+                                <div id="exportRootName" style="
+                                    flex:1;font-size:12px;font-family:var(--font-mono);
+                                    padding:8px 11px;background:rgba(255,255,255,0.04);
+                                    border:1px solid rgba(255,255,255,0.1);border-radius:6px;
+                                    color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    No root folder chosen
+                                </div>
+                                <button class="action-button" style="background:#0369a1;margin:0;white-space:nowrap;flex-shrink:0;" onclick="chooseExportFolder()">📁 Choose Root</button>
+                                <button class="action-button" style="background:#334155;border:1px solid var(--border);margin:0;white-space:nowrap;flex-shrink:0;" onclick="clearExportFolder()">✕ Clear</button>
                             </div>
+
+                            <!-- Subfolder list (hidden until root picked) -->
+                            <div id="exportSubfolderPanel" style="display:none;margin-top:12px;">
+                                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);">Subfolders</div>
+                                    <button onclick="refreshExportSubfolders()" style="
+                                        background:transparent;border:1px solid rgba(255,255,255,0.12);
+                                        color:var(--text-muted);padding:3px 10px;border-radius:5px;
+                                        font-size:11px;font-weight:600;cursor:pointer;">↺ Refresh</button>
+                                </div>
+                                <div id="exportSubfolderList" style="max-height:220px;overflow-y:auto;
+                                    scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;"></div>
+                            </div>
+
+                            <!-- Queue status -->
                             <div style="display:flex;align-items:center;justify-content:space-between;
-                                        padding:10px 12px;background:rgba(255,255,255,0.03);
+                                        padding:10px 12px;margin-top:14px;
+                                        background:rgba(255,255,255,0.03);
                                         border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
                                 <div>
-                                    <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:3px;">Pending Queue</div>
+                                    <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:3px;">Offline Queue</div>
                                     <div id="exportQueueCount" style="font-size:11px;color:var(--text-muted);">Checking…</div>
                                 </div>
                                 <button onclick="retryExportQueue()" style="
@@ -1761,6 +2008,7 @@
                                     color:var(--accent-blue);padding:6px 12px;border-radius:6px;
                                     font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">↺ Retry Now</button>
                             </div>
+
                             <p id="exportFolderUnsupported" style="display:none;font-size:11px;color:var(--accent-orange);margin:10px 0 0;line-height:1.5;padding:8px 10px;background:rgba(247,168,0,0.08);border:1px solid rgba(247,168,0,0.25);border-radius:6px;">
                                 ⚠️ Your browser doesn't support the File System Access API. Install the PWA in Chrome or Edge on desktop to enable folder copy.
                             </p>
@@ -2586,9 +2834,9 @@
             try {
                 const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
                 await saveExportFolderHandle(handle);
+                await saveExportSubfolderName(null); // reset subfolder when root changes
                 await updateExportFolderLabel();
-                showToast(`✅ Export folder set: "${handle.name}"`, 'success');
-                // Try to flush any existing queue immediately
+                showToast(`✅ Root folder set: "${handle.name}" — pick a subfolder below`, 'success', 5000);
                 processExportQueue().catch(() => {});
                 updateExportQueueUI();
             } catch (err) {
@@ -2598,9 +2846,15 @@
             }
         };
 
+        window.refreshExportSubfolders = async function() {
+            const rootHandle = await loadExportFolderHandle().catch(() => null);
+            const selectedSub = await loadExportSubfolderName().catch(() => null);
+            await refreshSubfolderList(rootHandle, selectedSub);
+        };
+
         window.clearExportFolder = async function() {
-            if (!confirm('Clear the chosen export folder? Queued files will remain until you choose a new folder.')) return;
-            await clearExportFolderHandle();
+            if (!confirm('Clear the chosen export folder and subfolder selection? Queued files will remain until you choose a new folder.')) return;
+            await clearExportFolderHandle(); // also clears exportSubfolderName
             await updateExportFolderLabel();
             showToast('✕ Export folder cleared', 'warning');
         };
@@ -3593,35 +3847,35 @@
 
             // ── PHASE 2: Copy to chosen export folder (if configured) ─────────────
             const fsaSupported = ('showDirectoryPicker' in window);
-            if (!fsaSupported) return; // browser doesn't support folder access
+            if (!fsaSupported) return;
 
-            const dirHandle = await loadExportFolderHandle().catch(() => null);
-            if (!dirHandle) return; // no folder chosen yet — nothing to do
+            const rootHandle = await loadExportFolderHandle().catch(() => null);
+            if (!rootHandle) return;
+
+            const subfolderName = await loadExportSubfolderName().catch(() => null);
 
             if (!navigator.onLine) {
-                // Offline — queue for later
-                await enqueueExportCopy(filename, csvString).catch(() => {});
+                await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
                 updateExportQueueUI();
                 showToast('📵 Offline — copy queued for export folder', 'warning', 5000);
                 return;
             }
 
-            // Online — try to write immediately
             try {
-                const hasPermission = await verifyHandlePermission(dirHandle);
+                const hasPermission = await verifyHandlePermission(rootHandle);
                 if (!hasPermission) {
-                    // Can't get permission right now — queue it
-                    await enqueueExportCopy(filename, csvString).catch(() => {});
+                    await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
                     updateExportQueueUI();
                     showToast('⚠️ Folder permission needed — queued. Open Settings to reauthorise.', 'warning', 7000);
                     return;
                 }
-                await writeFileToHandle(dirHandle, filename, csvString);
-                showToast(`✅ Copied to "${dirHandle.name}" → ${filename}`, 'success', 5000);
+                const targetHandle = await resolveWriteHandle(rootHandle);
+                await writeFileToHandle(targetHandle, filename, csvString);
+                const destLabel = subfolderName ? `${rootHandle.name} / ${subfolderName}` : rootHandle.name;
+                showToast(`✅ Copied to "${destLabel}"`, 'success', 5000);
                 updateExportQueueUI();
             } catch (err) {
-                // Write failed — queue for retry
-                await enqueueExportCopy(filename, csvString).catch(() => {});
+                await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
                 updateExportQueueUI();
                 showToast(`⚠️ Folder copy failed — queued for retry`, 'warning', 5000);
             }
