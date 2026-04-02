@@ -3918,13 +3918,11 @@
             if (rootHandle) {
                 const currentSub = await loadExportSubfolderName().catch(() => null);
                 const { subs, fromCache } = await listSubfolders(rootHandle);
-                const result = await showExportFolderPicker(rootHandle, currentSub, subs, fromCache);
+                const result = await showExportFolderPicker(rootHandle, null, subs, fromCache);
                 if (result.cancelled) return; // user dismissed
                 if (result.subfolderName === 'download-only') {
                     chosenSubfolder = 'download-only';
                 } else {
-                    // Save the chosen subfolder as the new default
-                    await saveExportSubfolderName(result.subfolderName).catch(() => {});
                     chosenSubfolder = result.subfolderName;
                 }
             }
