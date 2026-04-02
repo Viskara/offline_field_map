@@ -1528,6 +1528,7 @@
                     }
 
                     if (statusEl) statusEl.textContent = `✅ Imported ${data.tiles.length.toLocaleString()} tiles`;
+                    if (_roadTileLayer) { _roadTileLayer.setSource(createRoadTileSource()); if (map) map.render(); }
                     await initRoadTileLayer();
                     _ensureRoadLayerInSwitcher();
                     showToast(`✅ Road tile cache imported (${data.tiles.length.toLocaleString()} tiles)`, 'success', 5000);
@@ -1681,29 +1682,27 @@
             return done;
         }
 
-        // Create the OL road tile layer (reads from IDB)
+        // Create the OL road tile source (reads from IDB) — callable independently for cache busting
         let _roadTileLayer = null;
-        function createRoadTileLayer() {
-            const source = new ol.source.XYZ({
-                url: 'road://{z}/{x}/{y}',  // fake — intercepted by tileLoadFunction
+        function createRoadTileSource() {
+            return new ol.source.XYZ({
+                url: 'road://{z}/{x}/{y}',  // fake URL — intercepted by tileLoadFunction
                 tileLoadFunction: async function(tile, src) {
                     const m = src.match(/road:\/\/(\d+)\/(\d+)\/(\d+)/);
                     if (!m) { tile.setState(3); return; }
                     const key = `${m[1]}/${m[2]}/${m[3]}`;
                     const dataURL = await roadTileGet(key);
-                    if (dataURL) {
-                        tile.getImage().src = dataURL;
-                    } else {
-                        // transparent blank
-                        tile.getImage().src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-                    }
+                    tile.getImage().src = dataURL ||
+                        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
                 },
                 crossOrigin: null,
             });
+        }
+        function createRoadTileLayer() {
             return new ol.layer.Tile({
                 title: 'Road Layer',
                 type: 'base',
-                source,
+                source: createRoadTileSource(),
                 visible: false,
                 zIndex: 0,
             });
@@ -1773,8 +1772,9 @@
                     });
                     if (statusEl) statusEl.textContent = `✅ Done — ${count.toLocaleString()} tiles built`;
                     if (progressBar) progressBar.style.width = '100%';
-                    // Store filename for display
                     await dbSave('settings', { key: 'roadLayerFilename', value: file.name });
+                    // Replace source to bust OL's in-memory tile cache
+                    if (_roadTileLayer) { _roadTileLayer.setSource(createRoadTileSource()); if (map) map.render(); }
                     await initRoadTileLayer();
                     _ensureRoadLayerInSwitcher();
                     showToast(`✅ Road layer built: ${count.toLocaleString()} tiles`, 'success', 5000);
@@ -1794,12 +1794,19 @@
             await roadTileClear();
             await dbSave('settings', { key: 'roadLayerFilename', value: null });
             if (_roadTileLayer) {
+                // OL caches tiles in memory — replace the source entirely to bust it
+                _roadTileLayer.setSource(createRoadTileSource());
                 _roadTileLayer.setVisible(false);
-                _roadTileLayer.getSource().refresh();
+                if (map) map.render();
             }
+            // Remove from layer switcher
             const menuBtn = document.querySelector('#lsMenu [data-road]');
             if (menuBtn) menuBtn.remove();
-            await initRoadTileLayer();
+            // Update status in settings panel immediately
+            const statusEl = document.getElementById('roadLayerStatus');
+            if (statusEl) { statusEl.textContent = 'No road layer built yet'; statusEl.style.color = 'var(--text-muted)'; }
+            const filenameEl = document.getElementById('roadLayerFilename');
+            if (filenameEl) filenameEl.textContent = '';
             showToast('🗑 Road layer cleared', 'warning');
         };
 
