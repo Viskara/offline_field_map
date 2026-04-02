@@ -1,4 +1,4 @@
-const CACHE = "field-map-v3";
+const CACHE = "field-map-v5";
 const TILE_CACHE = "field-map-tiles-v1";
 const OFFLINE_PAGE = "offline.html";
 
