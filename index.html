@@ -1389,33 +1389,10 @@
         // ─── End CSV Export Folder & Queue ───────────────────────────────────────
 
         // ═══════════════════════════════════════════════════════════════════════════
-        // ROAD LAYER — CSV → raster tile engine
+        // ROAD LAYER — tile cache (built externally via Python script)
         // ═══════════════════════════════════════════════════════════════════════════
 
-        const ROAD_TILE_SIZE = 256; // px per tile
-
-        // Tile coordinate helpers (Web Mercator / Slippy Map)
-        function lonLatToTile(lon, lat, zoom) {
-            const x = Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
-            const latRad = lat * Math.PI / 180;
-            const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, zoom));
-            return { x, y };
-        }
-        function tileToMercator(tx, ty, zoom) {
-            // Returns {minX,minY,maxX,maxY} in EPSG:3857 for a slippy tile
-            const n = Math.pow(2, zoom);
-            const lonMin = tx / n * 360 - 180;
-            const lonMax = (tx + 1) / n * 360 - 180;
-            // Mercator latitude from tile Y (Y increases downward)
-            const latMax = Math.atan(Math.sinh(Math.PI * (1 - 2 * ty / n))) * 180 / Math.PI;
-            const latMin = Math.atan(Math.sinh(Math.PI * (1 - 2 * (ty + 1) / n))) * 180 / Math.PI;
-            const toM = (lon, lat) => ol.proj.transform([lon, lat], 'EPSG:4326', 'EPSG:3857');
-            const [minX, minY] = toM(lonMin, latMin);
-            const [maxX, maxY] = toM(lonMax, latMax);
-            return { minX, minY, maxX, maxY };
-        }
-
-        // Save / load / clear road tiles in IDB
+        // IDB helpers for road tile cache
         function roadTileSave(key, dataURL) {
             if (!db) return Promise.resolve();
             return new Promise((res, rej) => {
@@ -1452,10 +1429,6 @@
                 req.onerror = () => res(0);
             });
         }
-
-        // ── Road tile blob export / import ───────────────────────────────────────
-        // Format: JSON { version:1, tiles:[{key,dataURL},...] } downloaded as .rtcache
-
         function roadTileGetAll() {
             if (!db) return Promise.resolve([]);
             return new Promise((res, rej) => {
@@ -1466,15 +1439,20 @@
             });
         }
 
+        // ── Export / Import .rtcache blob ─────────────────────────────────────────
+
         window.exportRoadTileCache = async function() {
             const statusEl = document.getElementById('roadExportStatus');
             if (statusEl) { statusEl.textContent = 'Reading tiles from storage…'; statusEl.style.display = 'block'; }
             try {
                 const tiles = await roadTileGetAll();
-                if (!tiles.length) { showToast('⚠️ No road tiles to export', 'warning'); if (statusEl) statusEl.style.display = 'none'; return; }
-
+                if (!tiles.length) {
+                    showToast('⚠️ No road tiles to export — import an .rtcache file first', 'warning');
+                    if (statusEl) statusEl.style.display = 'none';
+                    return;
+                }
                 if (statusEl) statusEl.textContent = `Packaging ${tiles.length.toLocaleString()} tiles…`;
-                await new Promise(r => setTimeout(r, 0)); // yield so UI updates
+                await new Promise(r => setTimeout(r, 0));
 
                 const payload = JSON.stringify({ version: 1, tileCount: tiles.length, tiles });
                 const blob = new Blob([payload], { type: 'application/octet-stream' });
@@ -1487,7 +1465,7 @@
                 document.body.removeChild(link);
                 setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 
-                if (statusEl) { statusEl.textContent = `✅ Exported ${tiles.length.toLocaleString()} tiles`; }
+                if (statusEl) statusEl.textContent = `✅ Exported ${tiles.length.toLocaleString()} tiles`;
                 showToast(`✅ Road tile cache exported (${tiles.length.toLocaleString()} tiles)`, 'success', 5000);
             } catch(err) {
                 if (statusEl) statusEl.textContent = `❌ Export failed: ${err.message}`;
@@ -1506,12 +1484,11 @@
                 try {
                     const data = JSON.parse(e.target.result);
                     if (!data || data.version !== 1 || !Array.isArray(data.tiles))
-                        throw new Error('Invalid .rtcache file');
+                        throw new Error('Invalid .rtcache file — use the Python script to generate one');
 
                     if (statusEl) statusEl.textContent = `Importing ${data.tiles.length.toLocaleString()} tiles…`;
                     await roadTileClear();
 
-                    // Write in chunks to avoid blocking
                     const CHUNK = 200;
                     for (let i = 0; i < data.tiles.length; i += CHUNK) {
                         const chunk = data.tiles.slice(i, i + CHUNK);
@@ -1522,8 +1499,8 @@
                             tx.oncomplete = res;
                             tx.onerror = () => rej(tx.error);
                         });
-                        const pct = Math.round((i + CHUNK) / data.tiles.length * 100);
-                        if (statusEl) statusEl.textContent = `Importing… ${Math.min(i + CHUNK, data.tiles.length).toLocaleString()} / ${data.tiles.length.toLocaleString()} (${Math.min(pct,100)}%)`;
+                        const pct = Math.min(Math.round((i + CHUNK) / data.tiles.length * 100), 100);
+                        if (statusEl) statusEl.textContent = `Importing… ${Math.min(i + CHUNK, data.tiles.length).toLocaleString()} / ${data.tiles.length.toLocaleString()} (${pct}%)`;
                         await new Promise(r => setTimeout(r, 0));
                     }
 
@@ -1539,159 +1516,32 @@
             };
             reader.readAsText(file);
         };
-        // ── End road tile blob export / import ────────────────────────────────────
-        function parseRoadCSV(csvText) {
-            const results = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-            const features = [];
-            const E = getMarkupE(), N = getMarkupN(), proj = MGA94_ZONE_50_CODE;
-            results.data.forEach(row => {
-                try {
-                    if (row.Type === 'LineString' && row.Coords) {
-                        const coords = JSON.parse(row.Coords);
-                        const wmCoords = coords.map(([ex, ny]) => ol.proj.transform([ex, ny], proj, 'EPSG:3857'));
-                        features.push({ type: 'LineString', coords: wmCoords, color: row.Color || '#ffffff' });
-                    } else if (row.Type === 'Point' && row[E] && row[N]) {
-                        const wm = ol.proj.transform([parseFloat(row[E]), parseFloat(row[N])], proj, 'EPSG:3857');
-                        features.push({ type: 'Point', coords: wm, color: row.Color || '#ffffff' });
-                    }
-                } catch {}
-            });
-            return features;
-        }
 
-        // Render one tile to a canvas dataURL — returns null if tile is empty
-        function renderRoadTile(features, tileX, tileY, zoom) {
-            const { minX, minY, maxX, maxY } = tileToMercator(tileX, tileY, zoom);
-            const W = maxX - minX, H = maxY - minY;
-
-            // Quick helper: does a linestring's bounding box intersect this tile?
-            function lineIntersectsTile(coords) {
-                let lx0 = Infinity, ly0 = Infinity, lx1 = -Infinity, ly1 = -Infinity;
-                for (const [x, y] of coords) {
-                    if (x < lx0) lx0 = x; if (x > lx1) lx1 = x;
-                    if (y < ly0) ly0 = y; if (y > ly1) ly1 = y;
-                }
-                return lx1 >= minX && lx0 <= maxX && ly1 >= minY && ly0 <= maxY;
-            }
-
-            // Filter to only features that touch this tile
-            const local = features.filter(f => {
-                if (f.type === 'LineString') return lineIntersectsTile(f.coords);
-                // Point
-                const [x, y] = f.coords;
-                return x >= minX && x <= maxX && y >= minY && y <= maxY;
-            });
-
-            if (!local.length) return null;
-
-            const canvas = document.createElement('canvas');
-            canvas.width = canvas.height = ROAD_TILE_SIZE;
-            const ctx = canvas.getContext('2d');
-
-            // Map mercator → pixel (Y is flipped: minY at bottom → pixel ROAD_TILE_SIZE)
-            const toPixel = (mx, my) => [
-                (mx - minX) / W * ROAD_TILE_SIZE,
-                (1 - (my - minY) / H) * ROAD_TILE_SIZE
-            ];
-
-            // Clip rendering to tile bounds (handles lines that cross tile edges)
-            ctx.save();
-            ctx.rect(0, 0, ROAD_TILE_SIZE, ROAD_TILE_SIZE);
-            ctx.clip();
-
-            local.forEach(f => {
-                ctx.strokeStyle = f.color || '#ffffff';
-                ctx.fillStyle   = f.color || '#ffffff';
-                if (f.type === 'LineString') {
-                    ctx.lineWidth = 1.5;
-                    ctx.lineJoin = 'round';
-                    ctx.lineCap  = 'round';
-                    ctx.beginPath();
-                    f.coords.forEach(([mx, my], i) => {
-                        const [px, py] = toPixel(mx, my);
-                        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-                    });
-                    ctx.stroke();
-                } else if (f.type === 'Point') {
-                    const [px, py] = toPixel(f.coords[0], f.coords[1]);
-                    ctx.beginPath();
-                    ctx.arc(px, py, 3, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            });
-
-            ctx.restore();
-            return canvas.toDataURL('image/png');
-        }
-
-        // Main build function — called when user picks a road CSV
-        let _roadBuildAbort = false;
-        async function buildRoadTiles(csvText, onProgress) {
-            _roadBuildAbort = false;
-            const features = parseRoadCSV(csvText);
-            if (!features.length) throw new Error('No valid features found in CSV');
-
-            // Compute overall extent in WM
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            features.forEach(f => {
-                const pts = f.type === 'LineString' ? f.coords : [f.coords];
-                pts.forEach(([mx, my]) => {
-                    if (mx < minX) minX = mx; if (mx > maxX) maxX = mx;
-                    if (my < minY) minY = my; if (my > maxY) maxY = my;
-                });
-            });
-
-            // Pad 10%
-            const pw = (maxX - minX) * 0.1, ph = (maxY - minY) * 0.1;
-            minX -= pw; maxX += pw; minY -= ph; maxY += ph;
-
-            // Extent in lon/lat for tile range calculation
-            const [lonMin, latMin] = ol.proj.transform([minX, minY], 'EPSG:3857', 'EPSG:4326');
-            const [lonMax, latMax] = ol.proj.transform([maxX, maxY], 'EPSG:3857', 'EPSG:4326');
-
-            const zMin = appSettings.roadLayerZoomMin || 12;
-            const zMax = appSettings.roadLayerZoomMax || 18;
-
-            // Count total tiles
-            let total = 0;
-            for (let z = zMin; z <= zMax; z++) {
-                const tMin = lonLatToTile(lonMin, latMax, z);
-                const tMax = lonLatToTile(lonMax, latMin, z);
-                total += (tMax.x - tMin.x + 1) * (tMax.y - tMin.y + 1);
-            }
-
+        window.clearRoadLayer = async function() {
+            if (!confirm('Clear the road layer tile cache? Import a new .rtcache to restore it.')) return;
             await roadTileClear();
-            let done = 0;
-
-            for (let z = zMin; z <= zMax; z++) {
-                if (_roadBuildAbort) break;
-                const tMin = lonLatToTile(lonMin, latMax, z);
-                const tMax = lonLatToTile(lonMax, latMin, z);
-                for (let tx = tMin.x; tx <= tMax.x; tx++) {
-                    for (let ty = tMin.y; ty <= tMax.y; ty++) {
-                        if (_roadBuildAbort) break;
-                        const dataURL = renderRoadTile(features, tx, ty, z);
-                        if (dataURL) await roadTileSave(`${z}/${tx}/${ty}`, dataURL);
-                        done++;
-                        if (onProgress) onProgress(done, total);
-                        // Yield to keep UI responsive every 20 tiles
-                        if (done % 20 === 0) await new Promise(r => setTimeout(r, 0));
-                    }
-                }
+            if (_roadTileLayer) {
+                _roadTileLayer.setSource(createRoadTileSource());
+                _roadTileLayer.setVisible(false);
+                if (map) map.render();
             }
-            return done;
-        }
+            const menuBtn = document.querySelector('#lsMenu [data-road]');
+            if (menuBtn) menuBtn.remove();
+            const statusEl = document.getElementById('roadLayerStatus');
+            if (statusEl) { statusEl.textContent = 'No road layer loaded'; statusEl.style.color = 'var(--text-muted)'; }
+            showToast('🗑 Road layer cleared', 'warning');
+        };
 
-        // Create the OL road tile source (reads from IDB) — callable independently for cache busting
+        // ── OL tile layer (reads from IDB) ────────────────────────────────────────
+
         let _roadTileLayer = null;
         function createRoadTileSource() {
             return new ol.source.XYZ({
-                url: 'road://{z}/{x}/{y}',  // fake URL — intercepted by tileLoadFunction
+                url: 'road://{z}/{x}/{y}',
                 tileLoadFunction: async function(tile, src) {
                     const m = src.match(/road:\/\/(\d+)\/(\d+)\/(\d+)/);
                     if (!m) { tile.setState(3); return; }
-                    const key = `${m[1]}/${m[2]}/${m[3]}`;
-                    const dataURL = await roadTileGet(key);
+                    const dataURL = await roadTileGet(`${m[1]}/${m[2]}/${m[3]}`);
                     tile.getImage().src = dataURL ||
                         'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
                 },
@@ -1700,11 +1550,9 @@
         }
         function createRoadTileLayer() {
             return new ol.layer.Tile({
-                title: 'Road Layer',
-                type: 'base',
+                title: 'Road Layer', type: 'base',
                 source: createRoadTileSource(),
-                visible: false,
-                zIndex: 0,
+                visible: false, zIndex: 0,
             });
         }
 
@@ -1712,23 +1560,16 @@
             const count = await roadTileCount();
             const el = document.getElementById('roadLayerStatus');
             if (el) {
-                el.textContent = count > 0 ? `✅ ${count.toLocaleString()} tiles ready` : 'No road layer built yet';
+                el.textContent = count > 0 ? `✅ ${count.toLocaleString()} tiles loaded` : 'No road layer loaded';
                 el.style.color = count > 0 ? 'var(--accent-green)' : 'var(--text-muted)';
             }
-            if (count > 0 && _roadTileLayer) {
-                // Already in the layer switcher — ensure it's added
-                _ensureRoadLayerInSwitcher();
-            }
+            if (count > 0 && _roadTileLayer) _ensureRoadLayerInSwitcher();
         }
 
         function _ensureRoadLayerInSwitcher() {
             if (!_roadTileLayer || !map) return;
-            // Only add if not already in map
-            const existing = map.getLayers().getArray().find(l => l.get('title') === 'Road Layer');
-            if (!existing) {
+            if (!map.getLayers().getArray().find(l => l.get('title') === 'Road Layer'))
                 map.getLayers().insertAt(0, _roadTileLayer);
-            }
-            // Add to layer switcher menu if not there
             const menuDiv = document.getElementById('lsMenu');
             if (menuDiv && !menuDiv.querySelector('[data-road]')) {
                 const button = document.createElement('button');
@@ -1749,68 +1590,7 @@
             }
         }
 
-        window.importRoadCSV = async function(event) {
-            const file = event.target.files[0];
-            event.target.value = '';
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = async function(e) {
-                const statusEl = document.getElementById('roadBuildStatus');
-                const progressEl = document.getElementById('roadBuildProgress');
-                const progressBar = document.getElementById('roadBuildBar');
-                if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Parsing CSV…'; }
-                if (progressEl) progressEl.style.display = 'block';
-                try {
-                    let lastPct = 0;
-                    const count = await buildRoadTiles(e.target.result, (done, total) => {
-                        const pct = Math.round(done / total * 100);
-                        if (pct !== lastPct) {
-                            lastPct = pct;
-                            if (statusEl) statusEl.textContent = `Building tiles… ${done} / ${total} (${pct}%)`;
-                            if (progressBar) progressBar.style.width = pct + '%';
-                        }
-                    });
-                    if (statusEl) statusEl.textContent = `✅ Done — ${count.toLocaleString()} tiles built`;
-                    if (progressBar) progressBar.style.width = '100%';
-                    await dbSave('settings', { key: 'roadLayerFilename', value: file.name });
-                    // Replace source to bust OL's in-memory tile cache
-                    if (_roadTileLayer) { _roadTileLayer.setSource(createRoadTileSource()); if (map) map.render(); }
-                    await initRoadTileLayer();
-                    _ensureRoadLayerInSwitcher();
-                    showToast(`✅ Road layer built: ${count.toLocaleString()} tiles`, 'success', 5000);
-                    setTimeout(() => {
-                        if (progressEl) progressEl.style.display = 'none';
-                    }, 3000);
-                } catch(err) {
-                    if (statusEl) statusEl.textContent = `❌ Error: ${err.message}`;
-                    showToast(`❌ Road layer build failed: ${err.message}`, 'error', 7000);
-                }
-            };
-            reader.readAsText(file);
-        };
-
-        window.clearRoadLayer = async function() {
-            if (!confirm('Clear the road layer tile cache? You will need to re-import the CSV to rebuild it.')) return;
-            await roadTileClear();
-            await dbSave('settings', { key: 'roadLayerFilename', value: null });
-            if (_roadTileLayer) {
-                // OL caches tiles in memory — replace the source entirely to bust it
-                _roadTileLayer.setSource(createRoadTileSource());
-                _roadTileLayer.setVisible(false);
-                if (map) map.render();
-            }
-            // Remove from layer switcher
-            const menuBtn = document.querySelector('#lsMenu [data-road]');
-            if (menuBtn) menuBtn.remove();
-            // Update status in settings panel immediately
-            const statusEl = document.getElementById('roadLayerStatus');
-            if (statusEl) { statusEl.textContent = 'No road layer built yet'; statusEl.style.color = 'var(--text-muted)'; }
-            const filenameEl = document.getElementById('roadLayerFilename');
-            if (filenameEl) filenameEl.textContent = '';
-            showToast('🗑 Road layer cleared', 'warning');
-        };
-
-        // ─── End Road Tile Engine ─────────────────────────────────────────────────
+        // ─── End Road Layer ───────────────────────────────────────────────────────
 
         async function saveMarkupsToDB(markupSource) {
             if (!db) return;
@@ -2275,77 +2055,39 @@
                         <div class="scard" style="grid-column:1/-1;">
                             <div class="scard-title">🛣 Road Base Layer</div>
                             <div class="scard-hint">
-                                Import a markup-format CSV to rasterise into tiles stored on-device — zero lag, fully offline.
-                                Once built, export the tile cache as a <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px;">.rtcache</code> file and share it so other devices can import it directly — no rebuild needed.
+                                Use the <strong style="color:var(--text-primary);">Python script</strong> (<code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px;">csv_to_rtcache.py</code>) to convert your road CSV into an <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px;">.rtcache</code> file on your computer.
+                                Import it here to load it as a base layer. Export to share it with other devices so they skip the build entirely.
                             </div>
 
-                            <!-- Current status -->
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 10px;gap:10px;flex-wrap:wrap;">
-                                <div>
-                                    <div id="roadLayerStatus" style="font-size:12px;color:var(--text-muted);">Checking…</div>
-                                    <div id="roadLayerFilename" style="font-size:11px;color:var(--text-muted);margin-top:2px;"></div>
-                                </div>
+                            <!-- Status row -->
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 14px;gap:10px;flex-wrap:wrap;">
+                                <div id="roadLayerStatus" style="font-size:12px;color:var(--text-muted);">Checking…</div>
                                 <button onclick="clearRoadLayer()" style="
                                     background:transparent;border:1px solid rgba(231,76,60,0.4);
-                                    color:#fca5a5;padding:6px 12px;border-radius:6px;
+                                    color:#fca5a5;padding:6px 14px;border-radius:6px;
                                     font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;">
                                     🗑 Clear Tiles
                                 </button>
                             </div>
 
-                            <!-- Zoom range -->
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px;">
-                                <div>
-                                    <label class="slabel">Rasterise min zoom</label>
-                                    <input type="number" id="settingsRoadZoomMin" min="8" max="20" step="1" placeholder="14" class="sinput" />
-                                </div>
-                                <div>
-                                    <label class="slabel">Rasterise max zoom</label>
-                                    <input type="number" id="settingsRoadZoomMax" min="8" max="22" step="1" placeholder="17" class="sinput" />
-                                </div>
-                            </div>
-                            <div class="scard-hint" style="margin-bottom:14px;">
-                                Recommended <strong style="color:var(--text-primary);">14–17</strong> (~3,000–8,000 tiles, ~5–15 s build). Avoid going below 14 or above 18 — tile count grows exponentially. Each zoom level up roughly quadruples tile count.
-                            </div>
-
-                            <!-- Build from CSV -->
-                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:6px;">Build from CSV</div>
-                            <label style="display:block;margin-bottom:10px;">
-                                <div style="
-                                    padding:9px 14px;background:#0369a1;border:none;border-radius:7px;
-                                    color:white;font-size:12px;font-weight:600;cursor:pointer;
-                                    text-align:center;">📂 Import Road CSV &amp; Build Tiles</div>
-                                <input type="file" id="roadCSVInput" accept=".csv" style="display:none;" onchange="importRoadCSV(event)">
-                            </label>
-
-                            <!-- Progress bar -->
-                            <div id="roadBuildProgress" style="display:none;margin-bottom:14px;">
-                                <div id="roadBuildStatus" style="font-size:11px;color:var(--text-muted);margin-bottom:5px;"></div>
-                                <div style="height:5px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden;">
-                                    <div id="roadBuildBar" style="height:100%;width:0%;background:var(--accent-blue);border-radius:3px;transition:width 0.15s;"></div>
-                                </div>
-                            </div>
-
-                            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:0 0 14px;">
-
-                            <!-- Export / import blob -->
-                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:6px;">Share tile cache between devices</div>
-                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <!-- Import / Export -->
+                            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:8px;">Tile cache file</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
                                 <button onclick="exportRoadTileCache()" style="
-                                    padding:9px 10px;background:#0f766e;border:none;border-radius:7px;
+                                    padding:10px;background:#0f766e;border:none;border-radius:7px;
                                     color:white;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;">
                                     ⬇️ Export .rtcache
                                 </button>
                                 <label style="display:block;margin:0;">
                                     <div style="
-                                        padding:9px 10px;background:#334155;border:1px solid rgba(255,255,255,0.12);border-radius:7px;
-                                        color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;text-align:center;">
+                                        padding:10px;background:#0369a1;border:none;border-radius:7px;
+                                        color:white;font-size:12px;font-weight:600;cursor:pointer;text-align:center;">
                                         📂 Import .rtcache
                                     </div>
                                     <input type="file" accept=".rtcache" style="display:none;" onchange="importRoadTileCache(event)">
                                 </label>
                             </div>
-                            <div id="roadExportStatus" style="display:none;font-size:11px;color:var(--text-muted);padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:5px;"></div>
+                            <div id="roadExportStatus" style="display:none;font-size:11px;color:var(--text-muted);padding:7px 10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:5px;"></div>
                         </div>
 
                     </div>
@@ -2624,8 +2366,6 @@
             cacheMinZoom: 10,
             cacheMaxZoom: 17,
             defaultBaseLayer: 'Grey Canvas',   // title of the base layer to activate on load
-            roadLayerZoomMin: 14,              // lowest zoom to rasterise road tiles
-            roadLayerZoomMax: 17,              // highest zoom to rasterise road tiles
         };
 
         function getCoordE() { return appSettings.coordinateE || 'Longitude'; }
@@ -3410,28 +3150,13 @@
             const defBase = document.getElementById('settingsDefaultBase');
             if (defBase) defBase.value = appSettings.defaultBaseLayer || 'Grey Canvas';
 
-            // Road layer zoom range
-            const rzMin = document.getElementById('settingsRoadZoomMin');
-            const rzMax = document.getElementById('settingsRoadZoomMax');
-            if (rzMin) rzMin.value = appSettings.roadLayerZoomMin || 14;
-            if (rzMax) rzMax.value = appSettings.roadLayerZoomMax || 17;
-
-            // Road layer status + filename
+            // Road layer status
             roadTileCount().then(count => {
                 const el = document.getElementById('roadLayerStatus');
                 if (el) {
-                    el.textContent = count > 0 ? `✅ ${count.toLocaleString()} tiles ready` : 'No road layer built yet';
+                    el.textContent = count > 0 ? `✅ ${count.toLocaleString()} tiles loaded` : 'No road layer loaded';
                     el.style.color = count > 0 ? 'var(--accent-green)' : 'var(--text-muted)';
                 }
-            });
-            new Promise(res => {
-                const tx = db.transaction('settings', 'readonly');
-                const req = tx.objectStore('settings').get('roadLayerFilename');
-                req.onsuccess = () => res(req.result ? req.result.value : null);
-                req.onerror = () => res(null);
-            }).then(fname => {
-                const el = document.getElementById('roadLayerFilename');
-                if (el) el.textContent = fname ? `Source: ${fname}` : '';
             });
             renderLayerTypeSettingsList();
 
@@ -4697,8 +4422,6 @@
                     if (s.tapSlop    !== undefined) appSettings.tapSlop    = s.tapSlop;
                     if (s.eraseHitPx !== undefined) appSettings.eraseHitPx = s.eraseHitPx;
                     if (s.defaultBaseLayer  !== undefined) appSettings.defaultBaseLayer  = s.defaultBaseLayer;
-                    if (s.roadLayerZoomMin  !== undefined) appSettings.roadLayerZoomMin  = s.roadLayerZoomMin;
-                    if (s.roadLayerZoomMax  !== undefined) appSettings.roadLayerZoomMax  = s.roadLayerZoomMax;
                 }
             } catch(e) {}
         }
@@ -4729,8 +4452,6 @@
             appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 20;
             appSettings.eraseHitPx = parseInt(document.getElementById('settingsEraseHit').value) || 30;
             appSettings.defaultBaseLayer = document.getElementById('settingsDefaultBase').value || 'Grey Canvas';
-            appSettings.roadLayerZoomMin = parseInt(document.getElementById('settingsRoadZoomMin').value) || 12;
-            appSettings.roadLayerZoomMax = parseInt(document.getElementById('settingsRoadZoomMax').value) || 18;
 
             const rows = document.querySelectorAll('.settings-type-row[data-typeid]');
             appSettings.layerTypes = Array.from(rows).map(row => ({
