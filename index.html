@@ -830,7 +830,8 @@
         }
         /* ── Settings modal shared styles ────────────────────────── */
         .stab {
-            padding: 8px 16px;
+            flex: 1;
+            padding: 8px 6px;
             font-size: 12px; font-weight: 600;
             font-family: var(--font);
             background: transparent;
@@ -839,7 +840,7 @@
             cursor: pointer; white-space: nowrap;
             border-radius: 6px 6px 0 0;
             transition: color 0.15s, background 0.15s, border-color 0.15s;
-            margin-bottom: -1px;
+            text-align: center;
         }
         .stab:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
         .stab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); background: rgba(59,158,255,0.07); }
@@ -1584,9 +1585,9 @@
 
             <!-- ── Tab bar ── -->
             <div id="settingsTabs" style="
-                display:flex; gap:4px; padding:14px 24px 0;
+                display:flex; gap:2px; padding:14px 24px 0;
                 border-bottom:1px solid rgba(255,255,255,0.08);
-                flex-shrink:0; overflow-x:auto;">
+                flex-shrink:0;">
                 <button class="stab active" data-tab="sTab-map"     onclick="switchSettingsTab(this,'sTab-map')">🗺 Map</button>
                 <button class="stab"        data-tab="sTab-data"    onclick="switchSettingsTab(this,'sTab-data')">📋 Data</button>
                 <button class="stab"        data-tab="sTab-display" onclick="switchSettingsTab(this,'sTab-display')">🎨 Display</button>
@@ -2655,10 +2656,13 @@
             updateExportQueueUI();
         }
 
-        window.exportSettingsFile = function() {
+        window.exportSettingsFile = async function() {
+            const dirHandle = await loadExportFolderHandle().catch(() => null);
             const exportData = {
                 _version: 1,
                 _exported: new Date().toISOString(),
+                _exportFolderName: dirHandle ? dirHandle.name : null,
+                _note: dirHandle ? `Export folder "${dirHandle.name}" was set on the source device. Re-pick this folder after importing on a new device.` : null,
                 startLon:  appSettings.startLon,
                 startLat:  appSettings.startLat,
                 startZoom: appSettings.startZoom,
@@ -2718,8 +2722,13 @@
                     currentHoleLabelSize = appSettings.holeLabelSize + 'px';
                     // Persist first, then reload so every part of the app picks up the new settings cleanly
                     persistSettings().then(() => {
-                        showToast('✅ Settings imported — reloading…', 'success');
-                        setTimeout(() => window.location.reload(), 1000);
+                        if (data._exportFolderName) {
+                            showToast(`✅ Settings imported — reloading… (re-pick export folder "${data._exportFolderName}" in Settings → Export after reload)`, 'success', 4000);
+                            setTimeout(() => window.location.reload(), 4000);
+                        } else {
+                            showToast('✅ Settings imported — reloading…', 'success');
+                            setTimeout(() => window.location.reload(), 1000);
+                        }
                     }).catch(() => {
                         showToast('✅ Settings imported — reloading…', 'success');
                         setTimeout(() => window.location.reload(), 1000);
@@ -3826,6 +3835,7 @@
 
             await persistSettings();
             showToast('✅ Settings saved', 'success');
+            closeSettingsModal();
 
             if (drillDataLayerGroup) {
                 drillDataLayerGroup.getLayers().getArray().forEach(layer => {
