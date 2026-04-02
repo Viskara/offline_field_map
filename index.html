@@ -1369,46 +1369,6 @@
             await refreshSubfolderList(rootHandle, selectedSub);
         }
 
-        async function refreshSubfolderList(rootHandle, selectedSub) {
-            const listEl = document.getElementById('exportSubfolderList');
-            if (!listEl) return;
-            listEl.innerHTML = '';
-
-            if (!rootHandle) return;
-
-            // Loading state
-            listEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">Scanning subfolders…</div>';
-
-            const subs = await listSubfolders(rootHandle);
-
-            listEl.innerHTML = '';
-
-            // "Root (no subfolder)" option
-            const rootBtn = _makeSubfolderBtn('— Root folder (no subfolder)', !selectedSub, async () => {
-                await saveExportSubfolderName(null);
-                await updateExportFolderLabel();
-                showToast(`📁 Exporting to root: ${rootHandle.name}`, 'success');
-            });
-            listEl.appendChild(rootBtn);
-
-            if (subs.length === 0) {
-                const empty = document.createElement('div');
-                empty.style.cssText = 'font-size:11px;color:var(--text-muted);padding:6px 4px;';
-                empty.textContent = 'No subfolders found inside this folder.';
-                listEl.appendChild(empty);
-                return;
-            }
-
-            subs.forEach(name => {
-                const btn = _makeSubfolderBtn(`📂 ${name}`, name === selectedSub, async () => {
-                    await saveExportSubfolderName(name);
-                    await updateExportFolderLabel();
-                    showToast(`📂 Exporting to subfolder: ${name}`, 'success');
-                });
-                listEl.appendChild(btn);
-            });
-        }
-
         function _makeSubfolderBtn(label, isSelected, onClick) {
             const btn = document.createElement('button');
             btn.textContent = label;
@@ -2848,18 +2808,22 @@
                 showToast('⚠️ Not supported in this browser — use Chrome or Edge on desktop', 'warning', 6000);
                 return;
             }
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                showToast('⚠️ Folder picker requires a secure (HTTPS) connection or installed PWA', 'warning', 7000);
+                return;
+            }
             try {
-                const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
                 await saveExportFolderHandle(handle);
-                await saveExportSubfolderName(null); // reset subfolder when root changes
+                await saveExportSubfolderName(null);
                 await updateExportFolderLabel();
                 showToast(`✅ Root folder set: "${handle.name}" — pick a subfolder below`, 'success', 5000);
                 processExportQueue().catch(() => {});
                 updateExportQueueUI();
             } catch (err) {
-                if (err.name !== 'AbortError') {
-                    showToast('❌ Could not open folder picker', 'error');
-                }
+                if (err.name === 'AbortError') return; // user cancelled — silent
+                // Show the real reason so it's diagnosable
+                showToast(`❌ Folder picker failed: ${err.message || err.name}`, 'error', 8000);
             }
         };
 
