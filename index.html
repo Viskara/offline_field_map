@@ -828,6 +828,81 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        /* ── Settings modal shared styles ────────────────────────── */
+        .stab {
+            padding: 8px 16px;
+            font-size: 12px; font-weight: 600;
+            font-family: var(--font);
+            background: transparent;
+            border: none; border-bottom: 2px solid transparent;
+            color: var(--text-muted);
+            cursor: pointer; white-space: nowrap;
+            border-radius: 6px 6px 0 0;
+            transition: color 0.15s, background 0.15s, border-color 0.15s;
+            margin-bottom: -1px;
+        }
+        .stab:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+        .stab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); background: rgba(59,158,255,0.07); }
+
+        .stab-pane { animation: stabFadeIn 0.18s ease; }
+        @keyframes stabFadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+
+        .sg-grid2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            align-items: start;
+        }
+
+        .scard {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 18px 20px;
+        }
+        .scard-title {
+            font-size: 13px; font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            letter-spacing: 0.01em;
+        }
+        .scard-hint {
+            font-size: 11px; color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        .slabel {
+            font-size: 11px; color: var(--text-muted);
+            display: block; margin-bottom: 4px;
+            font-weight: 500;
+        }
+        .sinput {
+            background: #1e293b;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 8px 11px;
+            width: 100%;
+            font-family: var(--font);
+            font-size: 13px;
+            margin-bottom: 0;
+            transition: border-color 0.15s;
+        }
+        .sinput:focus { outline: none; border-color: var(--accent-blue); }
+
+        .sval-badge {
+            font-size: 12px; color: var(--text-primary);
+            font-family: var(--font-mono);
+            background: rgba(59,158,255,0.12);
+            border: 1px solid rgba(59,158,255,0.25);
+            border-radius: 5px;
+            padding: 2px 8px;
+            min-width: 44px; text-align: center;
+            flex-shrink: 0;
+        }
+
+        /* Close modal on backdrop click */
+        #settingsModal { cursor: default; }
     </style>
     
     <script>
@@ -923,7 +998,7 @@
         
         
         const DB_NAME = 'FieldLogMapDB';
-        const DB_VERSION = 3;
+        const DB_VERSION = 4;
         let db = null;
 
         function openDB() {
@@ -942,6 +1017,10 @@
                     }
                     if (!database.objectStoreNames.contains('settings')) {
                         database.createObjectStore('settings', { keyPath: 'key' });
+                    }
+                    // v4: queue for deferred CSV copies to chosen folder
+                    if (!database.objectStoreNames.contains('csvExportQueue')) {
+                        database.createObjectStore('csvExportQueue', { keyPath: 'id', autoIncrement: true });
                     }
                 };
                 req.onsuccess = e => { db = e.target.result; resolve(db); };
@@ -990,6 +1069,138 @@
                 req.onerror = () => reject(req.error);
             });
         }
+
+        // ─── CSV Export Folder & Queue ────────────────────────────────────────────
+
+        // Save/load the FileSystemDirectoryHandle (structured-cloneable) in IndexedDB
+        async function saveExportFolderHandle(handle) {
+            if (!db) return;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('settings', 'readwrite');
+                tx.objectStore('settings').put({ key: 'exportFolderHandle', value: handle });
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function loadExportFolderHandle() {
+            if (!db) return null;
+            return new Promise((resolve) => {
+                const tx = db.transaction('settings', 'readonly');
+                const req = tx.objectStore('settings').get('exportFolderHandle');
+                req.onsuccess = () => resolve(req.result ? req.result.value : null);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        async function clearExportFolderHandle() {
+            if (!db) return;
+            return new Promise((resolve) => {
+                const tx = db.transaction('settings', 'readwrite');
+                tx.objectStore('settings').delete('exportFolderHandle');
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+            });
+        }
+
+        // Queue a pending CSV copy (stores filename + CSV text content)
+        async function enqueueExportCopy(filename, csvText) {
+            if (!db) return;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('csvExportQueue', 'readwrite');
+                tx.objectStore('csvExportQueue').add({ filename, csvText, queuedAt: new Date().toISOString() });
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        async function dequeueExportItem(id) {
+            if (!db) return;
+            return dbDelete('csvExportQueue', id);
+        }
+
+        async function getAllQueuedExports() {
+            if (!db) return [];
+            return dbGetAll('csvExportQueue');
+        }
+
+        // Write a CSV text blob into the chosen directory handle
+        async function writeFileToHandle(dirHandle, filename, csvText) {
+            const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(csvText);
+            await writable.close();
+        }
+
+        // Verify we still have permission to write to the stored handle
+        async function verifyHandlePermission(dirHandle) {
+            try {
+                const perm = await dirHandle.queryPermission({ mode: 'readwrite' });
+                if (perm === 'granted') return true;
+                const req = await dirHandle.requestPermission({ mode: 'readwrite' });
+                return req === 'granted';
+            } catch {
+                return false;
+            }
+        }
+
+        // Process all queued copies when online + handle available
+        async function processExportQueue() {
+            if (!navigator.onLine) return;
+            const dirHandle = await loadExportFolderHandle();
+            if (!dirHandle) return;
+            const queue = await getAllQueuedExports();
+            if (!queue.length) return;
+
+            const hasPermission = await verifyHandlePermission(dirHandle);
+            if (!hasPermission) {
+                showToast('⚠️ No permission for export folder — open Settings to reauthorise', 'warning', 6000);
+                return;
+            }
+
+            let successCount = 0, failCount = 0;
+            for (const item of queue) {
+                try {
+                    await writeFileToHandle(dirHandle, item.filename, item.csvText);
+                    await dequeueExportItem(item.id);
+                    successCount++;
+                } catch {
+                    failCount++;
+                }
+            }
+            updateExportQueueUI();
+            if (successCount > 0) showToast(`✅ ${successCount} queued CSV(s) copied to export folder`, 'success', 5000);
+            if (failCount > 0)    showToast(`⚠️ ${failCount} CSV(s) failed to copy — will retry`, 'warning', 5000);
+        }
+
+        // Called from settings panel to update the queue count badge
+        async function updateExportQueueUI() {
+            const el = document.getElementById('exportQueueCount');
+            if (!el) return;
+            const queue = await getAllQueuedExports().catch(() => []);
+            if (queue.length === 0) {
+                el.textContent = 'No files queued';
+                el.style.color = 'var(--text-muted)';
+            } else {
+                el.textContent = `${queue.length} file(s) pending copy`;
+                el.style.color = 'var(--accent-orange)';
+            }
+        }
+
+        async function updateExportFolderLabel() {
+            const el = document.getElementById('exportFolderName');
+            if (!el) return;
+            const handle = await loadExportFolderHandle().catch(() => null);
+            if (handle) {
+                el.textContent = `📁 ${handle.name}`;
+                el.style.color = 'var(--accent-green)';
+            } else {
+                el.textContent = 'No folder chosen';
+                el.style.color = 'var(--text-muted)';
+            }
+        }
+
+        // ─── End CSV Export Folder & Queue ───────────────────────────────────────
 
         async function saveMarkupsToDB(markupSource) {
             if (!db) return;
@@ -1336,139 +1547,298 @@
         </div>
     </div>
 
-    <div id="settingsPanel" class="widget-panel">
-        <div class="panel-header">
-            <h3>⚙️ Settings</h3>
-            <p>Configure map, projection, CSV types &amp; GPS</p>
-        </div>
-        <div class="panel-body">
+    <!-- ═══════════════════════════════════════════════════════════════════
+         SETTINGS — full-screen tabbed modal (replaces narrow side panel)
+         ═══════════════════════════════════════════════════════════════════ -->
+    <div id="settingsPanel" style="display:none;"><!-- stub so togglePanel doesn't break --></div>
 
-            <div class="panel-section">
-                <h4>Map Start Position</h4>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
-                    <div>
-                        <label style="margin-bottom:2px;">Longitude</label>
-                        <input type="number" id="settingsStartLon" step="0.0001" placeholder="0" style="margin-bottom:0;" />
+    <div id="settingsModal" style="
+        display:none; position:fixed; inset:0; z-index:3000;
+        background:rgba(10,14,26,0.82); backdrop-filter:blur(6px);
+        -webkit-backdrop-filter:blur(6px); align-items:center; justify-content:center;">
+
+        <div id="settingsDialog" style="
+            background:#111827; border:1px solid rgba(255,255,255,0.1);
+            border-radius:12px; box-shadow:0 24px 64px rgba(0,0,0,0.7);
+            width:min(820px,96vw); max-height:90vh;
+            display:flex; flex-direction:column; overflow:hidden;
+            font-family:var(--font);">
+
+            <!-- ── Modal header ── -->
+            <div style="
+                display:flex; align-items:center; justify-content:space-between;
+                padding:18px 24px 0; flex-shrink:0;">
+                <div>
+                    <div style="font-size:17px;font-weight:700;color:var(--text-primary);letter-spacing:0.01em;">⚙️ Settings</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Configure map, projection, CSV columns, display &amp; export</div>
+                </div>
+                <button onclick="closeSettingsModal()" style="
+                    background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.12);
+                    color:var(--text-muted); width:34px; height:34px; border-radius:8px;
+                    font-size:18px; cursor:pointer; display:flex; align-items:center;
+                    justify-content:center; line-height:1; flex-shrink:0;
+                    transition:background 0.15s, color 0.15s;"
+                    onmouseover="this.style.background='rgba(255,255,255,0.14)';this.style.color='#fff'"
+                    onmouseout="this.style.background='rgba(255,255,255,0.07)';this.style.color='var(--text-muted)'">✕</button>
+            </div>
+
+            <!-- ── Tab bar ── -->
+            <div id="settingsTabs" style="
+                display:flex; gap:4px; padding:14px 24px 0;
+                border-bottom:1px solid rgba(255,255,255,0.08);
+                flex-shrink:0; overflow-x:auto;">
+                <button class="stab active" data-tab="sTab-map"     onclick="switchSettingsTab(this,'sTab-map')">🗺 Map</button>
+                <button class="stab"        data-tab="sTab-data"    onclick="switchSettingsTab(this,'sTab-data')">📋 Data</button>
+                <button class="stab"        data-tab="sTab-display" onclick="switchSettingsTab(this,'sTab-display')">🎨 Display</button>
+                <button class="stab"        data-tab="sTab-export"  onclick="switchSettingsTab(this,'sTab-export')">📤 Export</button>
+                <button class="stab"        data-tab="sTab-system"  onclick="switchSettingsTab(this,'sTab-system')">🔧 System</button>
+            </div>
+
+            <!-- ── Tab panes (scrollable) ── -->
+            <div style="flex:1; overflow-y:auto; overflow-x:hidden; padding:24px;
+                        scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.15) transparent;">
+
+                <!-- ▸ MAP tab ─────────────────────────────────────────── -->
+                <div id="sTab-map" class="stab-pane">
+                    <div class="sg-grid2">
+
+                        <div class="scard">
+                            <div class="scard-title">📍 Start Position</div>
+                            <div class="scard-hint">Where the map opens on first load. Navigate to your site, note the coordinates, then enter them here.</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px;">
+                                <div>
+                                    <label class="slabel">Longitude</label>
+                                    <input type="number" id="settingsStartLon" step="0.0001" placeholder="0" class="sinput" />
+                                </div>
+                                <div>
+                                    <label class="slabel">Latitude</label>
+                                    <input type="number" id="settingsStartLat" step="0.0001" placeholder="0" class="sinput" />
+                                </div>
+                                <div>
+                                    <label class="slabel">Zoom</label>
+                                    <input type="number" id="settingsStartZoom" min="1" max="22" step="1" placeholder="4" class="sinput" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">🌐 Projection</div>
+                            <div class="scard-hint">Find proj4 strings at <strong style="color:var(--text-primary);">epsg.io</strong> — search your EPSG code and copy the proj4 export.</div>
+                            <div style="margin-top:12px;">
+                                <label class="slabel">EPSG Code</label>
+                                <input type="text" id="settingsProjCode" placeholder="e.g. EPSG:32750" class="sinput" />
+                                <label class="slabel" style="margin-top:8px;">proj4 Definition String</label>
+                                <input type="text" id="settingsProj4" placeholder="e.g. +proj=utm +zone=50 +south …" class="sinput" />
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">🗃 Tile Cache Zoom Range</div>
+                            <div class="scard-hint">Controls which zoom levels are cached when you tap <em>Cache Current View</em>. Higher max zoom = more tiles = more storage.</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                                <div>
+                                    <label class="slabel">Min zoom</label>
+                                    <input type="number" id="settingsCacheMinZoom" min="1" max="22" step="1" placeholder="10" class="sinput" />
+                                </div>
+                                <div>
+                                    <label class="slabel">Max zoom</label>
+                                    <input type="number" id="settingsCacheMaxZoom" min="1" max="22" step="1" placeholder="17" class="sinput" />
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
-                    <div>
-                        <label style="margin-bottom:2px;">Latitude</label>
-                        <input type="number" id="settingsStartLat" step="0.0001" placeholder="0" style="margin-bottom:0;" />
-                    </div>
-                    <div>
-                        <label style="margin-bottom:2px;">Zoom</label>
-                        <input type="number" id="settingsStartZoom" min="1" max="22" step="1" placeholder="4" style="margin-bottom:0;" />
-                    </div>
                 </div>
-                <p style="font-size:10px;color:var(--text-muted);margin:6px 0 0;line-height:1.5;">Tip: navigate to your area of interest on the map, note the coordinates, then set them here.</p>
-            </div>
 
-            <div class="panel-section">
-                <h4>Projection</h4>
-                <label>EPSG Code</label>
-                <input type="text" id="settingsProjCode" placeholder="e.g. EPSG:4326" />
-                <label>proj4 Definition String</label>
-                <input type="text" id="settingsProj4" placeholder="e.g. +proj=utm +zone=50 +south …" />
-                <p style="font-size:10px;color:var(--text-muted);margin:-2px 0 0;line-height:1.5;">Find proj4 strings at <strong style="color:var(--text-primary);">epsg.io</strong> — search your EPSG code and copy the proj4 export.</p>
-            </div>
+                <!-- ▸ DATA tab ────────────────────────────────────────── -->
+                <div id="sTab-data" class="stab-pane" style="display:none;">
+                    <div class="sg-grid2">
 
-            <div class="panel-section">
-                <h4>CSV Column Headers</h4>
-                <label>Drill data Easting column</label>
-                <input type="text" id="settingsECol" placeholder="e.g. Longitude" />
-                <label>Drill data Northing column</label>
-                <input type="text" id="settingsNCol" placeholder="e.g. Latitude" />
-                <label>Label column (used for point labels)</label>
-                <input type="text" id="settingsHoleId" placeholder="Column header for point labels" />
-                <label>Markup export Easting column</label>
-                <input type="text" id="settingsMarkupE" placeholder="e.g. Longitude" />
-                <label>Markup export Northing column</label>
-                <input type="text" id="settingsMarkupN" placeholder="e.g. Latitude" />
-            </div>
+                        <div class="scard">
+                            <div class="scard-title">📥 Drill Data CSV Columns</div>
+                            <div class="scard-hint">Column header names in your imported drill CSV files. Case-sensitive — must match exactly.</div>
+                            <div style="margin-top:12px;">
+                                <label class="slabel">Easting column</label>
+                                <input type="text" id="settingsECol" placeholder="e.g. Longitude" class="sinput" />
+                                <label class="slabel" style="margin-top:8px;">Northing column</label>
+                                <input type="text" id="settingsNCol" placeholder="e.g. Latitude" class="sinput" />
+                                <label class="slabel" style="margin-top:8px;">Label column <span style="font-weight:400;opacity:0.65;">(used for point labels on map)</span></label>
+                                <input type="text" id="settingsHoleId" placeholder="e.g. HoleID" class="sinput" />
+                            </div>
+                        </div>
 
-            <div class="panel-section">
-                <h4>GPS</h4>
-                <label>Accuracy threshold (m) — warn if worse than this</label>
-                <input type="number" id="settingsGpsAcc" min="1" max="500" step="1" placeholder="15" />
-            </div>
+                        <div class="scard">
+                            <div class="scard-title">📤 Markup Export CSV Columns</div>
+                            <div class="scard-hint">Column header names written into the exported markup CSV.</div>
+                            <div style="margin-top:12px;">
+                                <label class="slabel">Easting column</label>
+                                <input type="text" id="settingsMarkupE" placeholder="e.g. Longitude" class="sinput" />
+                                <label class="slabel" style="margin-top:8px;">Northing column</label>
+                                <input type="text" id="settingsMarkupN" placeholder="e.g. Latitude" class="sinput" />
+                            </div>
+                        </div>
 
-            <div class="panel-section">
-                <h4>Tile Cache Zoom Range</h4>
-                <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;line-height:1.5;">Controls which zoom levels are cached when you tap <em>Cache Current View</em>. Higher max zoom = more tiles = more storage.</p>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                    <div>
-                        <label style="margin-bottom:2px;">Min zoom</label>
-                        <input type="number" id="settingsCacheMinZoom" min="1" max="22" step="1" placeholder="10" style="margin-bottom:0;" />
-                    </div>
-                    <div>
-                        <label style="margin-bottom:2px;">Max zoom</label>
-                        <input type="number" id="settingsCacheMaxZoom" min="1" max="22" step="1" placeholder="17" style="margin-bottom:0;" />
+                        <div class="scard" style="grid-column:1/-1;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <div class="scard-title" style="margin-bottom:0;">🏷 CSV Layer Types</div>
+                                <button onclick="addLayerTypeSetting()" style="
+                                    font-size:11px;font-weight:700;
+                                    background:rgba(46,204,113,0.15);border:1px solid rgba(46,204,113,0.3);
+                                    color:var(--accent-green);padding:5px 12px;border-radius:5px;cursor:pointer;">+ Add Type</button>
+                            </div>
+                            <div class="scard-hint" style="margin-bottom:14px;">Each type is matched against the imported CSV filename (case-insensitive). <strong style="color:var(--text-primary);">Keyword</strong> = string in filename. <strong style="color:var(--text-primary);">Z-order</strong> = rendering priority (higher = on top).</div>
+                            <div id="layerTypeSettingsList"></div>
+                        </div>
+
                     </div>
                 </div>
+
+                <!-- ▸ DISPLAY tab ─────────────────────────────────────── -->
+                <div id="sTab-display" class="stab-pane" style="display:none;">
+                    <div class="sg-grid2">
+
+                        <div class="scard">
+                            <div class="scard-title">🔤 Label Size</div>
+                            <div class="scard-hint">Size of text labels shown on drill hole points.</div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+                                <input type="range" id="settingsLabelSize" min="6" max="32" step="1" style="flex:1;"
+                                    oninput="updateHoleLabelSize(this.value); document.getElementById('settingsLabelSizeVal').textContent=this.value+'px'; const lm=document.getElementById('holeLabelSize'); if(lm){lm.value=this.value;}">
+                                <span id="settingsLabelSizeVal" class="sval-badge"></span>
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">👆 Marker Tap Tolerance</div>
+                            <div class="scard-hint">How many pixels you can move before a tap becomes a pan. Increase on touch screens (try 16–24 px) if markers are hard to place.</div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+                                <input type="range" id="settingsTapSlop" min="2" max="40" step="1" style="flex:1;" oninput="document.getElementById('settingsTapSlopVal').textContent=this.value+'px'">
+                                <span id="settingsTapSlopVal" class="sval-badge"></span>
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">🧹 Erase Tool Hit Radius</div>
+                            <div class="scard-hint">How close you must tap to a markup for the erase tool to remove it.</div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+                                <input type="range" id="settingsEraseHit" min="10" max="80" step="2" style="flex:1;" oninput="document.getElementById('settingsEraseHitVal').textContent=this.value+'px'">
+                                <span id="settingsEraseHitVal" class="sval-badge"></span>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- ▸ EXPORT tab ──────────────────────────────────────── -->
+                <div id="sTab-export" class="stab-pane" style="display:none;">
+                    <div class="sg-grid2">
+
+                        <div class="scard" id="exportFolderSection">
+                            <div class="scard-title">📁 Export Folder</div>
+                            <div class="scard-hint">
+                                Markups are always saved to <strong style="color:var(--text-primary);">Downloads</strong> first.
+                                Set a second destination folder below and the file will be copied there automatically.
+                                If you're offline, the copy is queued and retried when you reconnect.
+                            </div>
+                            <div id="exportFolderName" style="
+                                font-size:12px;font-family:var(--font-mono);
+                                padding:9px 12px;background:rgba(255,255,255,0.04);
+                                border:1px solid rgba(255,255,255,0.1);border-radius:6px;
+                                margin:12px 0 10px;color:var(--text-muted);">No folder chosen</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+                                <button class="action-button" style="background:#0369a1;margin:0;" onclick="chooseExportFolder()">📁 Choose Folder</button>
+                                <button class="action-button" style="background:#334155;border:1px solid var(--border);margin:0;" onclick="clearExportFolder()">✕ Clear Folder</button>
+                            </div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;
+                                        padding:10px 12px;background:rgba(255,255,255,0.03);
+                                        border:1px solid rgba(255,255,255,0.08);border-radius:6px;">
+                                <div>
+                                    <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:3px;">Pending Queue</div>
+                                    <div id="exportQueueCount" style="font-size:11px;color:var(--text-muted);">Checking…</div>
+                                </div>
+                                <button onclick="retryExportQueue()" style="
+                                    background:transparent;border:1px solid rgba(59,158,255,0.4);
+                                    color:var(--accent-blue);padding:6px 12px;border-radius:6px;
+                                    font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">↺ Retry Now</button>
+                            </div>
+                            <p id="exportFolderUnsupported" style="display:none;font-size:11px;color:var(--accent-orange);margin:10px 0 0;line-height:1.5;padding:8px 10px;background:rgba(247,168,0,0.08);border:1px solid rgba(247,168,0,0.25);border-radius:6px;">
+                                ⚠️ Your browser doesn't support the File System Access API. Install the PWA in Chrome or Edge on desktop to enable folder copy.
+                            </p>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">📦 Settings File</div>
+                            <div class="scard-hint">Back up your configuration or share it across devices by exporting to a <code style="background:rgba(255,255,255,0.07);padding:1px 5px;border-radius:3px;">.json</code> file.</div>
+                            <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;">
+                                <button class="action-button" style="background:#0f766e;margin:0;" onclick="exportSettingsFile()">⬇️ Export Settings File</button>
+                                <label style="display:block;margin:0;">
+                                    <div class="action-button" style="background:#334155;border:1px solid var(--border);cursor:pointer;text-align:center;margin:0;">📂 Import Settings File</div>
+                                    <input type="file" id="settingsFileInput" accept=".json" style="display:none;" onchange="importSettingsFile(event)">
+                                </label>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- ▸ SYSTEM tab ──────────────────────────────────────── -->
+                <div id="sTab-system" class="stab-pane" style="display:none;">
+                    <div class="sg-grid2">
+
+                        <div class="scard">
+                            <div class="scard-title">📡 GPS Accuracy Threshold</div>
+                            <div class="scard-hint">The app shows a warning when GPS accuracy is worse than this value. Typical good fix: &lt;5 m. Open-sky: 3–8 m.</div>
+                            <div style="margin-top:12px;">
+                                <label class="slabel">Threshold (metres)</label>
+                                <input type="number" id="settingsGpsAcc" min="1" max="500" step="1" placeholder="15" class="sinput" />
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">📍 GPS &amp; Location Permissions</div>
+                            <div class="scard-hint">
+                                Browsers can't grant permanent geolocation — it's a security boundary. Install as a PWA to minimise repeated prompts.<br><br>
+                                <strong style="color:var(--text-primary);">To minimise prompts:</strong><br>
+                                1. Tap <em>Install App</em> in the toolbar.<br>
+                                2. Android: Chrome ⋮ → <em>Add to Home Screen</em>.<br>
+                                3. Desktop: address bar install icon → <em>Install</em>.<br>
+                                4. After installing tap GPS → <em>Allow while using app</em>.
+                            </div>
+                            <div id="gpsPerm" style="font-size:11px;color:var(--text-muted);margin:12px 0 8px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;">Checking permission…</div>
+                            <button onclick="checkGPSPermission()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:8px 14px;border-radius:var(--radius);font-size:12px;font-weight:600;cursor:pointer;width:100%;">🔍 Check GPS Permission</button>
+                        </div>
+
+                        <div class="scard" style="grid-column:1/-1;">
+                            <div class="scard-title" style="color:#fca5a5;">⚠️ Danger Zone</div>
+                            <div class="scard-hint">Reset all settings to factory defaults. This cannot be undone.</div>
+                            <button class="action-button" style="background:#7f1d1d;border:1px solid rgba(252,165,165,0.2);margin-top:14px;max-width:260px;" onclick="resetSettingsToDefaults()">↺ Reset All Settings to Defaults</button>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div><!-- end scrollable pane area -->
+
+            <!-- ── Modal footer ── -->
+            <div style="
+                display:flex; align-items:center; justify-content:space-between;
+                padding:14px 24px; border-top:1px solid rgba(255,255,255,0.08);
+                background:#0d1120; flex-shrink:0; gap:10px; flex-wrap:wrap;">
+                <div style="font-size:11px;color:var(--text-muted);">Changes apply immediately after saving.</div>
+                <div style="display:flex;gap:8px;">
+                    <button onclick="closeSettingsModal()" style="
+                        background:transparent;border:1px solid rgba(255,255,255,0.15);
+                        color:var(--text-muted);padding:8px 18px;border-radius:7px;
+                        font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+                    <button onclick="saveSettings()" style="
+                        background:linear-gradient(135deg,#1d4ed8,#2563eb);
+                        border:none;color:white;padding:8px 22px;border-radius:7px;
+                        font-size:13px;font-weight:700;cursor:pointer;
+                        box-shadow:0 2px 8px rgba(37,99,235,0.45);">💾 Save Settings</button>
+                </div>
             </div>
 
-            <div class="panel-section">
-                <h4>Display</h4>
-                <label>Label size (px)</label>
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <input type="range" id="settingsLabelSize" min="6" max="32" step="1"
-                        style="flex:1;margin-bottom:0;"
-                        oninput="updateHoleLabelSize(this.value); document.getElementById('settingsLabelSizeVal').textContent=this.value+'px'; const lm=document.getElementById('holeLabelSize'); if(lm){lm.value=this.value;}">
-                    <span id="settingsLabelSizeVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
-                </div>
-                <label>Marker tap tolerance (px) — how much you can move before a tap becomes a pan</label>
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <input type="range" id="settingsTapSlop" min="2" max="40" step="1" style="flex:1;margin-bottom:0;" oninput="document.getElementById('settingsTapSlopVal').textContent=this.value+'px'">
-                    <span id="settingsTapSlopVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
-                </div>
-                <p style="font-size:10px;color:var(--text-muted);margin:2px 0 10px;line-height:1.5;">Increase if markers are hard to place (try 16–24px on touch screens). Decrease if panning accidentally places markers.</p>
-                <label>Erase tool hit radius (px) — how close you must tap to erase a marker</label>
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <input type="range" id="settingsEraseHit" min="10" max="80" step="2" style="flex:1;margin-bottom:0;" oninput="document.getElementById('settingsEraseHitVal').textContent=this.value+'px'">
-                    <span id="settingsEraseHitVal" style="font-size:11px;color:var(--text-primary);font-family:var(--font-mono);min-width:32px;text-align:right;"></span>
-                </div>
-            </div>
-
-            <div class="panel-section">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                    <h4 style="margin:0;">CSV Layer Types</h4>
-                    <button onclick="addLayerTypeSetting()" style="font-size:10px;font-weight:700;background:rgba(46,204,113,0.15);border:1px solid rgba(46,204,113,0.3);color:var(--accent-green);padding:4px 10px;border-radius:4px;cursor:pointer;">+ Add Type</button>
-                </div>
-                <p style="font-size:10px;color:var(--text-muted);margin:0 0 10px;line-height:1.6;">
-                    Each type is matched against the CSV filename (case-insensitive). <strong style="color:var(--text-primary);">Keyword</strong> = string to match in filename. <strong style="color:var(--text-primary);">Z-order</strong> = rendering priority (higher = drawn on top).
-                </p>
-                <div id="layerTypeSettingsList"></div>
-            </div>
-
-            <div class="panel-section">
-                <button class="action-button" style="background:#0369a1;margin-top:4px;" onclick="saveSettings()">💾 Save Settings</button>
-                <button class="action-button" style="background:#334155;border:1px solid var(--border);" onclick="resetSettingsToDefaults()">↺ Reset to Defaults</button>
-                <hr style="margin:10px 0;">
-                <h4 style="margin:0 0 8px;">Import / Export Settings File</h4>
-                <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;line-height:1.6;">Export your current settings to a <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px;">.json</code> file to back them up or share across devices. Import to restore.</p>
-                <button class="action-button" style="background:#0f766e;" onclick="exportSettingsFile()">⬇️ Export Settings File</button>
-                <label style="display:block;margin-bottom:0;">
-                    <div class="action-button" style="background:#334155;border:1px solid var(--border);cursor:pointer;text-align:center;">📂 Import Settings File</div>
-                    <input type="file" id="settingsFileInput" accept=".json" style="display:none;" onchange="importSettingsFile(event)">
-                </label>
-            </div>
-
-            <div class="panel-section">
-                <h4>GPS &amp; Location Permissions</h4>
-                <div class="gps-perm-info">
-                    <strong>Why does the browser keep asking?</strong><br>
-                    Browsers cannot grant permanent geolocation — it's a browser security boundary, not something this app controls. There is no SSL certificate workaround for a local HTML file.<br><br>
-                    <strong>To minimise prompts:</strong><br>
-                    1. Install as a PWA (use the <em>Install App</em> button in the toolbar) — installed PWAs remember permissions per-app.<br>
-                    2. On Android: open in Chrome → tap ⋮ → <em>Add to Home Screen</em>.<br>
-                    3. On desktop: open in Chrome/Edge → address bar install icon → <em>Install</em>.<br>
-                    4. After installing, tap the GPS button once and choose <em>Allow while using app</em> — the PWA shell remembers it.
-                </div>
-                <div id="gpsPerm" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Checking permission…</div>
-                <button onclick="checkGPSPermission()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:7px 12px;border-radius:var(--radius);font-size:11px;font-weight:600;cursor:pointer;width:100%;">🔍 Check GPS Permission Status</button>
-            </div>
-
-        </div>
-    </div>
+        </div><!-- end settingsDialog -->
+    </div><!-- end settingsModal -->
 
     <script>
         
@@ -1609,6 +1979,8 @@
             updateNetworkStatus(true);
             showToast('✅ Connection restored', 'success');
             if (map) map.getLayers().forEach(l => { if (l.getSource && l.getSource() && l.getSource().refresh) l.getSource().refresh(); });
+            // Flush any queued CSV copies now that we're back online
+            processExportQueue().catch(() => {});
         });
 
         window.addEventListener('offline', () => {
@@ -1810,9 +2182,15 @@
             markupSource.on('changefeature', () => scheduleMarkupSave(markupSource));
 
             
+            // ── startup network status & tile cache ──
             updateNetworkStatus(navigator.onLine);
             updateTileCacheCount();
             updateUndoBtn();
+
+            // If already online at startup, flush any queued CSV folder copies
+            if (navigator.onLine) {
+                processExportQueue().catch(() => {});
+            }
         }
 
         function scheduleMarkupSave(markupSource) {
@@ -2162,6 +2540,78 @@
 
         function updateActiveToolPill(type) {}
 
+        // ─── Settings Modal ───────────────────────────────────────────────────────
+
+        window.openSettingsModal = function() {
+            const modal = document.getElementById('settingsModal');
+            modal.style.display = 'flex';
+            // Trap backdrop click to close
+            modal.onclick = function(e) {
+                if (e.target === modal) closeSettingsModal();
+            };
+            populateSettingsPanel();
+            checkGPSPermission();
+        };
+
+        window.closeSettingsModal = function() {
+            document.getElementById('settingsModal').style.display = 'none';
+            // Remove panel-active from the settings button
+            document.getElementById('toggleSettingsButton').classList.remove('panel-active');
+        };
+
+        window.switchSettingsTab = function(btn, tabId) {
+            // Deactivate all tabs & panes
+            document.querySelectorAll('.stab').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.stab-pane').forEach(p => p.style.display = 'none');
+            // Activate selected
+            btn.classList.add('active');
+            document.getElementById(tabId).style.display = 'block';
+        };
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && document.getElementById('settingsModal').style.display === 'flex') {
+                closeSettingsModal();
+            }
+        });
+
+        // ─── End Settings Modal ───────────────────────────────────────────────────
+
+        window.chooseExportFolder = async function() {
+            if (!('showDirectoryPicker' in window)) {
+                showToast('⚠️ Not supported in this browser — use Chrome or Edge on desktop', 'warning', 6000);
+                return;
+            }
+            try {
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'downloads' });
+                await saveExportFolderHandle(handle);
+                await updateExportFolderLabel();
+                showToast(`✅ Export folder set: "${handle.name}"`, 'success');
+                // Try to flush any existing queue immediately
+                processExportQueue().catch(() => {});
+                updateExportQueueUI();
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    showToast('❌ Could not open folder picker', 'error');
+                }
+            }
+        };
+
+        window.clearExportFolder = async function() {
+            if (!confirm('Clear the chosen export folder? Queued files will remain until you choose a new folder.')) return;
+            await clearExportFolderHandle();
+            await updateExportFolderLabel();
+            showToast('✕ Export folder cleared', 'warning');
+        };
+
+        window.retryExportQueue = async function() {
+            const queue = await getAllQueuedExports().catch(() => []);
+            if (!queue.length) { showToast('No files in queue', ''); return; }
+            if (!navigator.onLine) { showToast('📵 Still offline — cannot retry yet', 'warning'); return; }
+            showToast('⏳ Retrying queued copies…', '', 2000);
+            await processExportQueue();
+        };
+
         function populateSettingsPanel() {
             document.getElementById('settingsStartLon').value  = appSettings.startLon  ?? 0;
             document.getElementById('settingsStartLat').value  = appSettings.startLat  ?? 0;
@@ -2190,6 +2640,19 @@
             document.getElementById('settingsEraseHit').value = eraseHit;
             document.getElementById('settingsEraseHitVal').textContent = eraseHit + 'px';
             renderLayerTypeSettingsList();
+
+            // Export folder section: show/hide based on FSA support, refresh labels
+            const fsaSupported = ('showDirectoryPicker' in window);
+            const unsupportedNote = document.getElementById('exportFolderUnsupported');
+            if (unsupportedNote) unsupportedNote.style.display = fsaSupported ? 'none' : 'block';
+            // Disable buttons if unsupported
+            document.querySelectorAll('#exportFolderSection button').forEach(b => {
+                b.disabled = !fsaSupported;
+                b.style.opacity = fsaSupported ? '1' : '0.4';
+                b.style.cursor = fsaSupported ? 'pointer' : 'not-allowed';
+            });
+            updateExportFolderLabel();
+            updateExportQueueUI();
         }
 
         window.exportSettingsFile = function() {
@@ -2253,17 +2716,14 @@
                     if (data.eraseHitPx !== undefined) appSettings.eraseHitPx = data.eraseHitPx;
                     applyProjection();
                     currentHoleLabelSize = appSettings.holeLabelSize + 'px';
-                    persistSettings();
-                    populateSettingsPanel();
-                    if (drillDataLayerGroup) {
-                        drillDataLayerGroup.getLayers().getArray().forEach(layer => {
-                            const typeCfg = appSettings.layerTypes.find(t => t.id === layer.get('dataType'));
-                            if (typeCfg) { layer.setStyle(createLayerStyle(typeCfg)); layer.setZIndex(typeCfg.priority); layer.changed(); }
-                        });
-                        updateQuickLayerBar();
-                        updateLayerListUI();
-                    }
-                    showToast('✅ Settings imported from file', 'success');
+                    // Persist first, then reload so every part of the app picks up the new settings cleanly
+                    persistSettings().then(() => {
+                        showToast('✅ Settings imported — reloading…', 'success');
+                        setTimeout(() => window.location.reload(), 1000);
+                    }).catch(() => {
+                        showToast('✅ Settings imported — reloading…', 'success');
+                        setTimeout(() => window.location.reload(), 1000);
+                    });
                 } catch(err) {
                     showToast('❌ Invalid settings file', 'error');
                 }
@@ -2666,8 +3126,11 @@
                     updateSavedMarkupsCount();
                 }
                 if (panelName === 'Settings') {
-                    populateSettingsPanel();
-                    checkGPSPermission();
+                    // Settings now lives in a full-screen modal — open it instead
+                    panel.style.display = 'none'; // keep stub hidden
+                    document.getElementById(target.buttonId).classList.remove('panel-active');
+                    openSettingsModal();
+                    return;
                 }
             } else {
                 if (panelName === 'Markup') {
@@ -3046,7 +3509,7 @@
             handleCSVUploadFiles(files, statusDiv);
         };
 
-        window.exportMarkupCSV = function() {
+        window.exportMarkupCSV = async function() {
             const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
             const exportFilter = document.getElementById('exportFilter').value;
             const baseFilename = document.getElementById('exportFilename').value.toUpperCase().replace(/\s/g, '_');
@@ -3104,6 +3567,7 @@
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const filename = `${baseFilename}_MARKUPS_${exportFilter === 'new' ? 'NEW' : 'ALL'}_${timestamp}.csv`;
 
+            // ── PHASE 1: Always trigger browser download to Downloads folder ──────
             const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -3112,10 +3576,46 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(link.href), 10000);
 
             const ptCount = toExport.filter(f => f.getGeometry().getType() === 'Point').length;
             const lnCount = toExport.filter(f => f.getGeometry().getType() === 'LineString').length;
-            showToast(`✅ Exported ${ptCount} point(s), ${lnCount} line(s) — ${filename}`, 'success');
+            showToast(`⬇️ Downloaded: ${ptCount} point(s), ${lnCount} line(s)`, 'success');
+
+            // ── PHASE 2: Copy to chosen export folder (if configured) ─────────────
+            const fsaSupported = ('showDirectoryPicker' in window);
+            if (!fsaSupported) return; // browser doesn't support folder access
+
+            const dirHandle = await loadExportFolderHandle().catch(() => null);
+            if (!dirHandle) return; // no folder chosen yet — nothing to do
+
+            if (!navigator.onLine) {
+                // Offline — queue for later
+                await enqueueExportCopy(filename, csvString).catch(() => {});
+                updateExportQueueUI();
+                showToast('📵 Offline — copy queued for export folder', 'warning', 5000);
+                return;
+            }
+
+            // Online — try to write immediately
+            try {
+                const hasPermission = await verifyHandlePermission(dirHandle);
+                if (!hasPermission) {
+                    // Can't get permission right now — queue it
+                    await enqueueExportCopy(filename, csvString).catch(() => {});
+                    updateExportQueueUI();
+                    showToast('⚠️ Folder permission needed — queued. Open Settings to reauthorise.', 'warning', 7000);
+                    return;
+                }
+                await writeFileToHandle(dirHandle, filename, csvString);
+                showToast(`✅ Copied to "${dirHandle.name}" → ${filename}`, 'success', 5000);
+                updateExportQueueUI();
+            } catch (err) {
+                // Write failed — queue for retry
+                await enqueueExportCopy(filename, csvString).catch(() => {});
+                updateExportQueueUI();
+                showToast(`⚠️ Folder copy failed — queued for retry`, 'warning', 5000);
+            }
         };
 
         window.toggleGpsTracking = function() {
