@@ -1208,6 +1208,12 @@
         // Try live scan; on failure fall back to IndexedDB cache
         async function listSubfolders(rootHandle) {
             try {
+                // Must have permission before we can call .entries()
+                const perm = await rootHandle.queryPermission({ mode: 'readwrite' });
+                if (perm !== 'granted') {
+                    const req = await rootHandle.requestPermission({ mode: 'readwrite' });
+                    if (req !== 'granted') throw new Error('permission denied');
+                }
                 const subs = [];
                 for await (const [name, handle] of rootHandle.entries()) {
                     if (handle.kind === 'directory') subs.push(name);
@@ -1969,16 +1975,27 @@
                                 min-height:18px;"></div>
 
                             <!-- Root folder row -->
-                            <div style="display:flex;align-items:center;gap:8px;margin:10px 0 6px;">
+                            <div style="margin:12px 0 6px;">
+                                <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:6px;">Root Folder</div>
                                 <div id="exportRootName" style="
-                                    flex:1;font-size:12px;font-family:var(--font-mono);
+                                    font-size:12px;font-family:var(--font-mono);
                                     padding:8px 11px;background:rgba(255,255,255,0.04);
                                     border:1px solid rgba(255,255,255,0.1);border-radius:6px;
-                                    color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    color:var(--text-muted);margin-bottom:8px;
+                                    word-break:break-all;">
                                     No root folder chosen
                                 </div>
-                                <button class="action-button" style="background:#0369a1;margin:0;white-space:nowrap;flex-shrink:0;" onclick="chooseExportFolder()">📁 Choose Root</button>
-                                <button class="action-button" style="background:#334155;border:1px solid var(--border);margin:0;white-space:nowrap;flex-shrink:0;" onclick="clearExportFolder()">✕ Clear</button>
+                                <div style="display:grid;grid-template-columns:1fr auto;gap:8px;">
+                                    <button onclick="chooseExportFolder()" style="
+                                        padding:9px 12px;background:#0369a1;border:none;border-radius:6px;
+                                        color:white;font-size:12px;font-weight:600;font-family:var(--font);
+                                        cursor:pointer;text-align:center;">📁 Choose Root Folder</button>
+                                    <button onclick="clearExportFolder()" style="
+                                        padding:9px 14px;background:transparent;
+                                        border:1px solid rgba(255,255,255,0.15);border-radius:6px;
+                                        color:var(--text-muted);font-size:12px;font-weight:600;font-family:var(--font);
+                                        cursor:pointer;white-space:nowrap;">✕ Clear</button>
+                                </div>
                             </div>
 
                             <!-- Subfolder list (hidden until root picked) -->
