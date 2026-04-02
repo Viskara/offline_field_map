@@ -3753,6 +3753,107 @@
             handleCSVUploadFiles(files, statusDiv);
         };
 
+        // ── Export subfolder picker modal ─────────────────────────────────────────
+
+        // Returns a Promise that resolves to { subfolderName, cancelled }
+        // subfolderName = null means root, 'download-only' means skip folder copy
+        function showExportFolderPicker(rootHandle, currentSub, subs, fromCache) {
+            return new Promise((resolve) => {
+                // Remove any existing picker
+                const existing = document.getElementById('exportPickerModal');
+                if (existing) existing.remove();
+
+                const modal = document.createElement('div');
+                modal.id = 'exportPickerModal';
+                modal.style.cssText = `
+                    position:fixed;inset:0;z-index:4000;
+                    background:rgba(10,14,26,0.75);backdrop-filter:blur(4px);
+                    display:flex;align-items:center;justify-content:center;padding:20px;
+                `;
+
+                const dialog = document.createElement('div');
+                dialog.style.cssText = `
+                    background:#111827;border:1px solid rgba(255,255,255,0.1);
+                    border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.7);
+                    width:min(400px,100%);display:flex;flex-direction:column;
+                    overflow:hidden;font-family:var(--font);
+                `;
+
+                // Header
+                const header = document.createElement('div');
+                header.style.cssText = 'padding:16px 20px 12px;border-bottom:1px solid rgba(255,255,255,0.08);';
+                header.innerHTML = `
+                    <div style="font-size:14px;font-weight:700;color:#e8edf5;margin-bottom:3px;">📤 Export to Folder</div>
+                    <div style="font-size:11px;color:#8899aa;">Choose destination inside <strong style="color:#e8edf5;">${rootHandle.name}</strong></div>
+                    ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;">📵 Showing cached folders — live scan unavailable</div>' : ''}
+                `;
+
+                // List
+                const list = document.createElement('div');
+                list.style.cssText = 'padding:10px 12px;max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
+
+                const makeBtn = (label, value, isSelected) => {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `
+                        display:block;width:100%;text-align:left;
+                        padding:9px 12px;margin-bottom:5px;
+                        background:${isSelected ? 'rgba(59,158,255,0.15)' : 'rgba(255,255,255,0.03)'};
+                        border:1px solid ${isSelected ? 'rgba(59,158,255,0.4)' : 'rgba(255,255,255,0.08)'};
+                        border-radius:7px;cursor:pointer;
+                        font-size:13px;font-family:var(--font);font-weight:${isSelected ? '600' : '400'};
+                        color:${isSelected ? '#3b9eff' : '#8899aa'};
+                        transition:background 0.12s,border-color 0.12s,color 0.12s;
+                    `;
+                    btn.textContent = label;
+                    btn.onmouseover = () => { btn.style.background='rgba(255,255,255,0.08)'; btn.style.color='#e8edf5'; };
+                    btn.onmouseout  = () => { btn.style.background=isSelected?'rgba(59,158,255,0.15)':'rgba(255,255,255,0.03)'; btn.style.color=isSelected?'#3b9eff':'#8899aa'; };
+                    btn.onclick = () => { modal.remove(); resolve({ subfolderName: value, cancelled: false }); };
+                    return btn;
+                };
+
+                // Root option
+                list.appendChild(makeBtn(`📁 ${rootHandle.name}  (root, no subfolder)`, null, currentSub === null));
+
+                // Subfolder options
+                subs.forEach(name => {
+                    list.appendChild(makeBtn(`📂 ${name}`, name, currentSub === name));
+                });
+
+                if (subs.length === 0 && !fromCache) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:12px;color:#8899aa;padding:8px 4px;';
+                    empty.textContent = 'No subfolders found — will export to root folder.';
+                    list.appendChild(empty);
+                }
+
+                // Footer
+                const footer = document.createElement('div');
+                footer.style.cssText = 'padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;';
+
+                const dlOnly = document.createElement('button');
+                dlOnly.textContent = '⬇️ Download only';
+                dlOnly.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                dlOnly.onclick = () => { modal.remove(); resolve({ subfolderName: 'download-only', cancelled: false }); };
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                cancelBtn.onclick = () => { modal.remove(); resolve({ cancelled: true }); };
+
+                footer.appendChild(dlOnly);
+                footer.appendChild(cancelBtn);
+                dialog.appendChild(header);
+                dialog.appendChild(list);
+                dialog.appendChild(footer);
+                modal.appendChild(dialog);
+
+                // Backdrop click = cancel
+                modal.onclick = (e) => { if (e.target === modal) { modal.remove(); resolve({ cancelled: true }); } };
+
+                document.body.appendChild(modal);
+            });
+        }
+
         window.exportMarkupCSV = async function() {
             const markupSource = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups').getSource();
             const exportFilter = document.getElementById('exportFilter').value;
@@ -3776,7 +3877,7 @@
                     if (typeof raw === 'string' && raw.startsWith('rgba')) {
                         const parts = raw.match(/\d+/g);
                         if (parts && parts.length >= 3)
-                            color = '#' + parts.slice(0,3).map(n => parseInt(n).toString(16).padStart(2,'0')).join('');
+                            color = '#' + parts.slice(0,3).map(n => parseInt(n).toString(16).padStart(2,'00')).join('');
                     } else if (typeof raw === 'string') {
                         color = raw;
                     }
@@ -3785,18 +3886,15 @@
             }
 
             const csvRows = [['Type', getMarkupE(), getMarkupN(), 'Coords', 'Timestamp', 'Color', 'Origin']];
-
             toExport.forEach(feature => {
                 const geomType = feature.getGeometry().getType();
                 const color = extractColor(feature);
                 const ts = feature.get('ts') || new Date().toISOString();
                 const origin = feature.get('origin') || 'unknown';
-
                 if (geomType === 'Point') {
                     const wm = feature.getGeometry().getCoordinates();
                     const mga = ol.proj.transform(wm, WGS84_WEB_MERCATOR, MGA94_ZONE_50_CODE);
                     csvRows.push(['Point', mga[0].toFixed(2), mga[1].toFixed(2), '', ts, color, origin]);
-
                 } else if (geomType === 'LineString') {
                     const wmCoords = feature.getGeometry().getCoordinates();
                     const mgaCoords = wmCoords.map(c => {
@@ -3811,7 +3909,27 @@
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const filename = `${baseFilename}_MARKUPS_${exportFilter === 'new' ? 'NEW' : 'ALL'}_${timestamp}.csv`;
 
-            // ── PHASE 1: Always trigger browser download to Downloads folder ──────
+            // ── Show subfolder picker if a root folder is configured ──────────────
+            const fsaSupported = ('showDirectoryPicker' in window);
+            const rootHandle = fsaSupported ? await loadExportFolderHandle().catch(() => null) : null;
+
+            let chosenSubfolder; // undefined = no root set (download only, no modal)
+
+            if (rootHandle) {
+                const currentSub = await loadExportSubfolderName().catch(() => null);
+                const { subs, fromCache } = await listSubfolders(rootHandle);
+                const result = await showExportFolderPicker(rootHandle, currentSub, subs, fromCache);
+                if (result.cancelled) return; // user dismissed
+                if (result.subfolderName === 'download-only') {
+                    chosenSubfolder = 'download-only';
+                } else {
+                    // Save the chosen subfolder as the new default
+                    await saveExportSubfolderName(result.subfolderName).catch(() => {});
+                    chosenSubfolder = result.subfolderName;
+                }
+            }
+
+            // ── PHASE 1: Always trigger browser download ──────────────────────────
             const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -3826,17 +3944,11 @@
             const lnCount = toExport.filter(f => f.getGeometry().getType() === 'LineString').length;
             showToast(`⬇️ Downloaded: ${ptCount} point(s), ${lnCount} line(s)`, 'success');
 
-            // ── PHASE 2: Copy to chosen export folder (if configured) ─────────────
-            const fsaSupported = ('showDirectoryPicker' in window);
-            if (!fsaSupported) return;
-
-            const rootHandle = await loadExportFolderHandle().catch(() => null);
-            if (!rootHandle) return;
-
-            const subfolderName = await loadExportSubfolderName().catch(() => null);
+            // ── PHASE 2: Copy to chosen folder ────────────────────────────────────
+            if (!rootHandle || chosenSubfolder === 'download-only') return;
 
             if (!navigator.onLine) {
-                await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
+                await enqueueExportCopy(filename, csvString, chosenSubfolder).catch(() => {});
                 updateExportQueueUI();
                 showToast('📵 Offline — copy queued for export folder', 'warning', 5000);
                 return;
@@ -3845,20 +3957,24 @@
             try {
                 const hasPermission = await verifyHandlePermission(rootHandle);
                 if (!hasPermission) {
-                    await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
+                    await enqueueExportCopy(filename, csvString, chosenSubfolder).catch(() => {});
                     updateExportQueueUI();
                     showToast('⚠️ Folder permission needed — queued. Open Settings to reauthorise.', 'warning', 7000);
                     return;
                 }
-                const targetHandle = await resolveWriteHandle(rootHandle);
+                let targetHandle = rootHandle;
+                if (chosenSubfolder) {
+                    try { targetHandle = await rootHandle.getDirectoryHandle(chosenSubfolder, { create: false }); }
+                    catch { targetHandle = rootHandle; }
+                }
                 await writeFileToHandle(targetHandle, filename, csvString);
-                const destLabel = subfolderName ? `${rootHandle.name} / ${subfolderName}` : rootHandle.name;
+                const destLabel = chosenSubfolder ? `${rootHandle.name} / ${chosenSubfolder}` : rootHandle.name;
                 showToast(`✅ Copied to "${destLabel}"`, 'success', 5000);
                 updateExportQueueUI();
-            } catch (err) {
-                await enqueueExportCopy(filename, csvString, subfolderName).catch(() => {});
+            } catch {
+                await enqueueExportCopy(filename, csvString, chosenSubfolder).catch(() => {});
                 updateExportQueueUI();
-                showToast(`⚠️ Folder copy failed — queued for retry`, 'warning', 5000);
+                showToast('⚠️ Folder copy failed — queued for retry', 'warning', 5000);
             }
         };
 
