@@ -4902,16 +4902,34 @@
             showToast('⏳ Waiting for GPS fix…', '');
         };
 
-        // FIX: Only block page unload when there are actual unsaved markups.
-        // Previously this always fired, which also blocked programmatic reloads
-        // (like hardReloadPWA) and prevented the browser from cleanly releasing
-        // memory when closing — contributing to lingering processes on mobile.
+        // ── Close / exit guard ────────────────────────────────────────────────────
+        // On a tablet the PWA red-X (or swipe-close) is easy to hit accidentally
+        // while walking. We always prompt if there's any meaningful data loaded,
+        // since the user won't know their markups are already safely in IDB.
+        //
+        // _hasUnsavedMarkups is still used by hardReloadPWA to bypass the guard.
         let _hasUnsavedMarkups = false;
+
+        function _appHasData() {
+            // Returns true if there's anything worth protecting on the map
+            try {
+                if (!map) return false;
+                const markupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+                if (markupLayer && markupLayer.getSource().getFeatures().length > 0) return true;
+                if (drillDataLayerGroup && drillDataLayerGroup.getLayers().getArray().length > 0) return true;
+            } catch(e) {}
+            return false;
+        }
+
         window.addEventListener('beforeunload', function(e) {
-            if (!_hasUnsavedMarkups) return; // don't block clean closes
-            e.preventDefault();
-            e.returnValue = 'You have unsaved data. Are you sure you want to leave?';
-            return e.returnValue;
+            if (_hasUnsavedMarkups || _appHasData()) {
+                e.preventDefault();
+                // Modern browsers show their own generic message; returnValue is kept
+                // for older engines. The text won't be visible on Chrome/Android PWA
+                // but the prompt itself will still appear.
+                e.returnValue = 'Close Field Map? Your data is saved on this device.';
+                return e.returnValue;
+            }
         });
 
         // FIX: Hard reload — unregisters the SW and clears the app shell cache,
