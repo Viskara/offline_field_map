@@ -1668,92 +1668,153 @@
                 const existing = document.getElementById('importPickerModal');
                 if (existing) existing.remove();
 
-                const modal = document.createElement('div');
-                modal.id = 'importPickerModal';
-                modal.style.cssText = `
-                    position:fixed;inset:0;z-index:4000;
-                    background:rgba(10,14,26,0.75);backdrop-filter:blur(4px);
-                    display:flex;align-items:center;justify-content:center;padding:20px;
-                `;
+                // ── shared style helpers ──────────────────────────────────────────
+                const MODAL_BG   = 'position:fixed;inset:0;z-index:4000;background:rgba(10,14,26,0.82);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;';
+                const DIALOG_CSS = 'background:#111827;border:1px solid rgba(255,255,255,0.11);border-radius:14px;box-shadow:0 28px 70px rgba(0,0,0,0.75);width:min(480px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;font-family:var(--font);';
+                const HDR_CSS    = 'padding:18px 20px 14px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;';
+                const LIST_CSS   = 'padding:14px 14px 6px;overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
+                const FOOT_CSS   = 'padding:12px 16px 16px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;flex-shrink:0;';
 
-                const dialog = document.createElement('div');
-                dialog.style.cssText = `
-                    background:#111827;border:1px solid rgba(255,255,255,0.1);
-                    border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.7);
-                    width:min(400px,100%);display:flex;flex-direction:column;
-                    overflow:hidden;font-family:var(--font);
-                `;
-
-                // Header
-                const header = document.createElement('div');
-                header.style.cssText = 'padding:16px 20px 12px;border-bottom:1px solid rgba(255,255,255,0.08);';
-                header.innerHTML = `
-                    <div style="font-size:14px;font-weight:700;color:#e8edf5;margin-bottom:3px;">📂 Import from Folder</div>
-                    <div style="font-size:11px;color:#8899aa;">Choose a folder inside <strong style="color:#e8edf5;">${rootHandle.name}</strong> to load its CSVs</div>
-                    ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;">📵 Folder unreachable — cannot browse subfolders</div>' : ''}
-                `;
-
-                // List
-                const list = document.createElement('div');
-                list.style.cssText = 'padding:10px 12px;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
-
-                const makeBtn = (label, dirHandle) => {
+                // ── tile button factory ───────────────────────────────────────────
+                // Each tile is a large finger-friendly card with icon + name + path hint
+                function makeTile(icon, name, sublabel, isSelected, onclick) {
                     const btn = document.createElement('button');
                     btn.style.cssText = `
-                        display:block;width:100%;text-align:left;
-                        padding:9px 12px;margin-bottom:5px;
-                        background:rgba(255,255,255,0.03);
-                        border:1px solid rgba(255,255,255,0.08);
-                        border-radius:7px;cursor:pointer;
-                        font-size:13px;font-family:var(--font);font-weight:400;
-                        color:#8899aa;
-                        transition:background 0.12s,border-color 0.12s,color 0.12s;
+                        display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+                        padding:14px 16px;
+                        background:${isSelected ? 'rgba(59,158,255,0.14)' : 'rgba(255,255,255,0.04)'};
+                        border:2px solid ${isSelected ? 'rgba(59,158,255,0.55)' : 'rgba(255,255,255,0.09)'};
+                        border-radius:10px;cursor:pointer;text-align:left;width:100%;
+                        min-height:64px;
+                        transition:background 0.12s,border-color 0.12s,transform 0.08s;
+                        -webkit-tap-highlight-color:transparent;
+                        margin-bottom:8px;
                     `;
-                    btn.textContent = label;
-                    btn.onmouseover = () => { btn.style.background='rgba(59,158,255,0.1)'; btn.style.borderColor='rgba(59,158,255,0.35)'; btn.style.color='#3b9eff'; };
-                    btn.onmouseout  = () => { btn.style.background='rgba(255,255,255,0.03)'; btn.style.borderColor='rgba(255,255,255,0.08)'; btn.style.color='#8899aa'; };
-                    btn.onclick = () => { modal.remove(); resolve(dirHandle); };
+                    btn.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:10px;width:100%;">
+                            <span style="font-size:22px;flex-shrink:0;line-height:1;">${icon}</span>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:14px;font-weight:${isSelected?'700':'500'};color:${isSelected?'#3b9eff':'#e8edf5'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</div>
+                                ${sublabel ? `<div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sublabel}</div>` : ''}
+                            </div>
+                            ${isSelected ? '<span style="font-size:16px;color:#3b9eff;flex-shrink:0;">✓</span>' : ''}
+                        </div>
+                    `;
+                    btn.addEventListener('pointerdown', () => { btn.style.transform='scale(0.98)'; btn.style.background='rgba(59,158,255,0.12)'; });
+                    btn.addEventListener('pointerup',   () => { btn.style.transform=''; });
+                    btn.addEventListener('pointerleave',() => { btn.style.transform=''; });
+                    btn.onclick = onclick;
                     return btn;
-                };
-
-                if (!fromCache) {
-                    // Root folder option
-                    list.appendChild(makeBtn(`📁 ${rootHandle.name}  (root)`, rootHandle));
-                    // Subfolders
-                    subs.forEach(({ name, handle }) => list.appendChild(makeBtn(`📂 ${name}`, handle)));
-                    if (subs.length === 0) {
-                        const empty = document.createElement('div');
-                        empty.style.cssText = 'font-size:12px;color:#8899aa;padding:8px 4px;';
-                        empty.textContent = 'No subfolders found — will load from root folder.';
-                        list.appendChild(empty);
-                    }
                 }
 
-                // Footer
-                const footer = document.createElement('div');
-                footer.style.cssText = 'padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
+                // ── Phase 1: selection ────────────────────────────────────────────
+                function buildSelectionPhase() {
+                    modal.innerHTML = '';
+                    const dialog = document.createElement('div');
+                    dialog.style.cssText = DIALOG_CSS;
 
-                const changeBtn = document.createElement('button');
-                changeBtn.textContent = '📁 Change Root Folder';
-                changeBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
-                changeBtn.onclick = async () => {
-                    modal.remove();
-                    resolve('__change__');
-                };
+                    const header = document.createElement('div');
+                    header.style.cssText = HDR_CSS;
+                    header.innerHTML = `
+                        <div style="font-size:15px;font-weight:700;color:#e8edf5;margin-bottom:4px;">📂 Import from Folder</div>
+                        <div style="font-size:12px;color:#8899aa;">Choose a folder inside <strong style="color:#e8edf5;">${rootHandle.name}</strong></div>
+                        ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;padding:6px 8px;background:rgba(247,168,0,0.08);border-radius:6px;">📵 Folder unreachable — showing last known subfolders</div>' : ''}
+                    `;
 
-                const cancelBtn = document.createElement('button');
-                cancelBtn.textContent = 'Cancel';
-                cancelBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
-                cancelBtn.onclick = () => { modal.remove(); resolve(null); };
+                    const list = document.createElement('div');
+                    list.style.cssText = LIST_CSS;
 
-                footer.appendChild(changeBtn);
-                footer.appendChild(cancelBtn);
-                dialog.appendChild(header);
-                dialog.appendChild(list);
-                dialog.appendChild(footer);
-                modal.appendChild(dialog);
+                    if (!fromCache) {
+                        list.appendChild(makeTile('📁', rootHandle.name, 'Root folder — load all CSVs here', false, () => buildConfirmPhase(rootHandle, rootHandle.name, '📁')));
+                        subs.forEach(({ name, handle }) =>
+                            list.appendChild(makeTile('📂', name, `${rootHandle.name} / ${name}`, false, () => buildConfirmPhase(handle, name, '📂')))
+                        );
+                        if (subs.length === 0) {
+                            const empty = document.createElement('div');
+                            empty.style.cssText = 'font-size:12px;color:#64748b;padding:10px 4px;text-align:center;';
+                            empty.textContent = 'No subfolders found — tap the root folder above to load CSVs from it.';
+                            list.appendChild(empty);
+                        }
+                    }
+
+                    const footer = document.createElement('div');
+                    footer.style.cssText = FOOT_CSS;
+
+                    const changeBtn = document.createElement('button');
+                    changeBtn.innerHTML = '📁 Change Root Folder';
+                    changeBtn.style.cssText = 'padding:11px 16px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    changeBtn.onclick = () => { modal.remove(); resolve('__change__'); };
+
+                    const cancelBtn = document.createElement('button');
+                    cancelBtn.textContent = 'Cancel';
+                    cancelBtn.style.cssText = 'padding:11px 16px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    cancelBtn.onclick = () => { modal.remove(); resolve(null); };
+
+                    footer.appendChild(changeBtn);
+                    footer.appendChild(cancelBtn);
+                    dialog.appendChild(header);
+                    dialog.appendChild(list);
+                    dialog.appendChild(footer);
+                    modal.appendChild(dialog);
+                }
+
+                // ── Phase 2: confirmation ─────────────────────────────────────────
+                function buildConfirmPhase(dirHandle, name, icon) {
+                    modal.innerHTML = '';
+                    const dialog = document.createElement('div');
+                    dialog.style.cssText = DIALOG_CSS;
+
+                    const header = document.createElement('div');
+                    header.style.cssText = HDR_CSS;
+                    header.innerHTML = `
+                        <div style="font-size:15px;font-weight:700;color:#e8edf5;margin-bottom:4px;">✅ Confirm Import</div>
+                        <div style="font-size:12px;color:#8899aa;">All CSV files in the selected folder will be loaded.</div>
+                    `;
+
+                    const body = document.createElement('div');
+                    body.style.cssText = 'padding:20px;flex:1;';
+                    body.innerHTML = `
+                        <div style="
+                            background:rgba(59,158,255,0.1);border:2px solid rgba(59,158,255,0.4);
+                            border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:14px;
+                        ">
+                            <span style="font-size:32px;flex-shrink:0;">${icon}</span>
+                            <div>
+                                <div style="font-size:16px;font-weight:700;color:#e8edf5;">${name}</div>
+                                <div style="font-size:12px;color:#64748b;margin-top:3px;">${rootHandle.name}${name !== rootHandle.name ? ' / ' + name : ''}</div>
+                            </div>
+                        </div>
+                        <div style="font-size:12px;color:#64748b;margin-top:14px;text-align:center;">Tap <strong style="color:#e8edf5;">Load CSVs</strong> to import, or <strong style="color:#e8edf5;">Back</strong> to choose a different folder.</div>
+                    `;
+
+                    const footer = document.createElement('div');
+                    footer.style.cssText = FOOT_CSS;
+
+                    const backBtn = document.createElement('button');
+                    backBtn.textContent = '← Back';
+                    backBtn.style.cssText = 'padding:11px 18px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    backBtn.onclick = buildSelectionPhase;
+
+                    const confirmBtn = document.createElement('button');
+                    confirmBtn.textContent = '📥 Load CSVs';
+                    confirmBtn.style.cssText = 'padding:11px 22px;background:linear-gradient(135deg,#1d4ed8,#2563eb);border:none;border-radius:8px;color:white;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,0.4);';
+                    confirmBtn.onclick = () => { modal.remove(); resolve(dirHandle); };
+
+                    footer.appendChild(backBtn);
+                    footer.appendChild(confirmBtn);
+                    dialog.appendChild(header);
+                    dialog.appendChild(body);
+                    dialog.appendChild(footer);
+                    modal.appendChild(dialog);
+                }
+
+                // ── Build and show ────────────────────────────────────────────────
+                const modal = document.createElement('div');
+                modal.id = 'importPickerModal';
+                modal.style.cssText = MODAL_BG;
                 modal.onclick = (e) => { if (e.target === modal) { modal.remove(); resolve(null); } };
                 document.body.appendChild(modal);
+                buildSelectionPhase();
             });
         }
 
@@ -4424,98 +4485,162 @@
         // subfolderName = null means root, 'download-only' means skip folder copy
         function showExportFolderPicker(rootHandle, currentSub, subs, fromCache) {
             return new Promise((resolve) => {
-                // Remove any existing picker
                 const existing = document.getElementById('exportPickerModal');
                 if (existing) existing.remove();
 
-                const modal = document.createElement('div');
-                modal.id = 'exportPickerModal';
-                modal.style.cssText = `
-                    position:fixed;inset:0;z-index:4000;
-                    background:rgba(10,14,26,0.75);backdrop-filter:blur(4px);
-                    display:flex;align-items:center;justify-content:center;padding:20px;
-                `;
+                // ── shared style constants (same as import modal) ────────────────
+                const MODAL_BG   = 'position:fixed;inset:0;z-index:4000;background:rgba(10,14,26,0.82);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;';
+                const DIALOG_CSS = 'background:#111827;border:1px solid rgba(255,255,255,0.11);border-radius:14px;box-shadow:0 28px 70px rgba(0,0,0,0.75);width:min(480px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;font-family:var(--font);';
+                const HDR_CSS    = 'padding:18px 20px 14px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;';
+                const LIST_CSS   = 'padding:14px 14px 6px;overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
+                const FOOT_CSS   = 'padding:12px 16px 16px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;flex-shrink:0;';
 
-                const dialog = document.createElement('div');
-                dialog.style.cssText = `
-                    background:#111827;border:1px solid rgba(255,255,255,0.1);
-                    border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,0.7);
-                    width:min(400px,100%);display:flex;flex-direction:column;
-                    overflow:hidden;font-family:var(--font);
-                `;
-
-                // Header
-                const header = document.createElement('div');
-                header.style.cssText = 'padding:16px 20px 12px;border-bottom:1px solid rgba(255,255,255,0.08);';
-                header.innerHTML = `
-                    <div style="font-size:14px;font-weight:700;color:#e8edf5;margin-bottom:3px;">📤 Export to Folder</div>
-                    <div style="font-size:11px;color:#8899aa;">Choose destination inside <strong style="color:#e8edf5;">${rootHandle.name}</strong></div>
-                    ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;">📵 Showing cached folders — live scan unavailable</div>' : ''}
-                `;
-
-                // List
-                const list = document.createElement('div');
-                list.style.cssText = 'padding:10px 12px;max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.15) transparent;';
-
-                const makeBtn = (label, value, isSelected) => {
+                function makeTile(icon, name, sublabel, isSelected, onclick) {
                     const btn = document.createElement('button');
                     btn.style.cssText = `
-                        display:block;width:100%;text-align:left;
-                        padding:9px 12px;margin-bottom:5px;
-                        background:${isSelected ? 'rgba(59,158,255,0.15)' : 'rgba(255,255,255,0.03)'};
-                        border:1px solid ${isSelected ? 'rgba(59,158,255,0.4)' : 'rgba(255,255,255,0.08)'};
-                        border-radius:7px;cursor:pointer;
-                        font-size:13px;font-family:var(--font);font-weight:${isSelected ? '600' : '400'};
-                        color:${isSelected ? '#3b9eff' : '#8899aa'};
-                        transition:background 0.12s,border-color 0.12s,color 0.12s;
+                        display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+                        padding:14px 16px;
+                        background:${isSelected ? 'rgba(59,158,255,0.14)' : 'rgba(255,255,255,0.04)'};
+                        border:2px solid ${isSelected ? 'rgba(59,158,255,0.55)' : 'rgba(255,255,255,0.09)'};
+                        border-radius:10px;cursor:pointer;text-align:left;width:100%;
+                        min-height:64px;
+                        transition:background 0.12s,border-color 0.12s,transform 0.08s;
+                        -webkit-tap-highlight-color:transparent;
+                        margin-bottom:8px;
                     `;
-                    btn.textContent = label;
-                    btn.onmouseover = () => { btn.style.background='rgba(255,255,255,0.08)'; btn.style.color='#e8edf5'; };
-                    btn.onmouseout  = () => { btn.style.background=isSelected?'rgba(59,158,255,0.15)':'rgba(255,255,255,0.03)'; btn.style.color=isSelected?'#3b9eff':'#8899aa'; };
-                    btn.onclick = () => { modal.remove(); resolve({ subfolderName: value, cancelled: false }); };
+                    btn.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:10px;width:100%;">
+                            <span style="font-size:22px;flex-shrink:0;line-height:1;">${icon}</span>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-size:14px;font-weight:${isSelected?'700':'500'};color:${isSelected?'#3b9eff':'#e8edf5'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</div>
+                                ${sublabel ? `<div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sublabel}</div>` : ''}
+                            </div>
+                            ${isSelected ? '<span style="font-size:16px;color:#3b9eff;flex-shrink:0;">✓</span>' : ''}
+                        </div>
+                    `;
+                    btn.addEventListener('pointerdown', () => { btn.style.transform='scale(0.98)'; btn.style.background='rgba(59,158,255,0.12)'; });
+                    btn.addEventListener('pointerup',   () => { btn.style.transform=''; });
+                    btn.addEventListener('pointerleave',() => { btn.style.transform=''; });
+                    btn.onclick = onclick;
                     return btn;
-                };
-
-                // Root option
-                list.appendChild(makeBtn(`📁 ${rootHandle.name}  (root, no subfolder)`, null, currentSub === null));
-
-                // Subfolder options
-                subs.forEach(name => {
-                    list.appendChild(makeBtn(`📂 ${name}`, name, currentSub === name));
-                });
-
-                if (subs.length === 0 && !fromCache) {
-                    const empty = document.createElement('div');
-                    empty.style.cssText = 'font-size:12px;color:#8899aa;padding:8px 4px;';
-                    empty.textContent = 'No subfolders found — will export to root folder.';
-                    list.appendChild(empty);
                 }
 
-                // Footer
-                const footer = document.createElement('div');
-                footer.style.cssText = 'padding:10px 12px 14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:8px;justify-content:flex-end;';
+                // ── Phase 1: selection ────────────────────────────────────────────
+                function buildSelectionPhase() {
+                    modal.innerHTML = '';
+                    const dialog = document.createElement('div');
+                    dialog.style.cssText = DIALOG_CSS;
 
-                const dlOnly = document.createElement('button');
-                dlOnly.textContent = '⬇️ Download only';
-                dlOnly.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
-                dlOnly.onclick = () => { modal.remove(); resolve({ subfolderName: 'download-only', cancelled: false }); };
+                    const header = document.createElement('div');
+                    header.style.cssText = HDR_CSS;
+                    header.innerHTML = `
+                        <div style="font-size:15px;font-weight:700;color:#e8edf5;margin-bottom:4px;">📤 Export to Folder</div>
+                        <div style="font-size:12px;color:#8899aa;">Choose destination inside <strong style="color:#e8edf5;">${rootHandle.name}</strong></div>
+                        ${fromCache ? '<div style="font-size:11px;color:#f7a800;margin-top:6px;padding:6px 8px;background:rgba(247,168,0,0.08);border-radius:6px;">📵 Showing cached folders — live scan unavailable</div>' : ''}
+                    `;
 
-                const cancelBtn = document.createElement('button');
-                cancelBtn.textContent = 'Cancel';
-                cancelBtn.style.cssText = 'padding:8px 14px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#8899aa;font-size:12px;font-weight:600;font-family:var(--font);cursor:pointer;';
-                cancelBtn.onclick = () => { modal.remove(); resolve({ cancelled: true }); };
+                    const list = document.createElement('div');
+                    list.style.cssText = LIST_CSS;
 
-                footer.appendChild(dlOnly);
-                footer.appendChild(cancelBtn);
-                dialog.appendChild(header);
-                dialog.appendChild(list);
-                dialog.appendChild(footer);
-                modal.appendChild(dialog);
+                    // Root option
+                    list.appendChild(makeTile('📁', rootHandle.name, 'Root folder — no subfolder', currentSub === null,
+                        () => buildConfirmPhase(null, rootHandle.name, '📁')));
 
-                // Backdrop click = cancel
+                    // Subfolder options
+                    subs.forEach(name =>
+                        list.appendChild(makeTile('📂', name, `${rootHandle.name} / ${name}`, currentSub === name,
+                            () => buildConfirmPhase(name, name, '📂')))
+                    );
+
+                    if (subs.length === 0 && !fromCache) {
+                        const empty = document.createElement('div');
+                        empty.style.cssText = 'font-size:12px;color:#64748b;padding:10px 4px;text-align:center;';
+                        empty.textContent = 'No subfolders found — tap the root folder above to export there.';
+                        list.appendChild(empty);
+                    }
+
+                    const footer = document.createElement('div');
+                    footer.style.cssText = FOOT_CSS;
+
+                    const dlOnly = document.createElement('button');
+                    dlOnly.innerHTML = '⬇️ Download only';
+                    dlOnly.style.cssText = 'padding:11px 16px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    dlOnly.onclick = () => { modal.remove(); resolve({ subfolderName: 'download-only', cancelled: false }); };
+
+                    const cancelBtn = document.createElement('button');
+                    cancelBtn.textContent = 'Cancel';
+                    cancelBtn.style.cssText = 'padding:11px 16px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    cancelBtn.onclick = () => { modal.remove(); resolve({ cancelled: true }); };
+
+                    footer.appendChild(dlOnly);
+                    footer.appendChild(cancelBtn);
+                    dialog.appendChild(header);
+                    dialog.appendChild(list);
+                    dialog.appendChild(footer);
+                    modal.appendChild(dialog);
+                }
+
+                // ── Phase 2: confirmation ─────────────────────────────────────────
+                function buildConfirmPhase(subfolderName, displayName, icon) {
+                    modal.innerHTML = '';
+                    const dialog = document.createElement('div');
+                    dialog.style.cssText = DIALOG_CSS;
+
+                    const destPath = subfolderName
+                        ? `${rootHandle.name} / ${displayName}`
+                        : `${rootHandle.name}  (root)`;
+
+                    const header = document.createElement('div');
+                    header.style.cssText = HDR_CSS;
+                    header.innerHTML = `
+                        <div style="font-size:15px;font-weight:700;color:#e8edf5;margin-bottom:4px;">✅ Confirm Export</div>
+                        <div style="font-size:12px;color:#8899aa;">CSV will be saved to the folder shown below.</div>
+                    `;
+
+                    const body = document.createElement('div');
+                    body.style.cssText = 'padding:20px;flex:1;';
+                    body.innerHTML = `
+                        <div style="
+                            background:rgba(46,204,113,0.08);border:2px solid rgba(46,204,113,0.35);
+                            border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:14px;
+                        ">
+                            <span style="font-size:32px;flex-shrink:0;">${icon}</span>
+                            <div>
+                                <div style="font-size:16px;font-weight:700;color:#e8edf5;">${displayName}</div>
+                                <div style="font-size:12px;color:#64748b;margin-top:3px;">${destPath}</div>
+                            </div>
+                        </div>
+                        <div style="font-size:12px;color:#64748b;margin-top:14px;text-align:center;">Tap <strong style="color:#e8edf5;">Save CSV</strong> to confirm, or <strong style="color:#e8edf5;">Back</strong> to choose a different folder.</div>
+                    `;
+
+                    const footer = document.createElement('div');
+                    footer.style.cssText = FOOT_CSS;
+
+                    const backBtn = document.createElement('button');
+                    backBtn.textContent = '← Back';
+                    backBtn.style.cssText = 'padding:11px 18px;background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#8899aa;font-size:13px;font-weight:600;font-family:var(--font);cursor:pointer;';
+                    backBtn.onclick = buildSelectionPhase;
+
+                    const confirmBtn = document.createElement('button');
+                    confirmBtn.textContent = '📤 Save CSV';
+                    confirmBtn.style.cssText = 'padding:11px 22px;background:linear-gradient(135deg,#0f766e,#0d9488);border:none;border-radius:8px;color:white;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;box-shadow:0 2px 8px rgba(13,148,136,0.4);';
+                    confirmBtn.onclick = () => { modal.remove(); resolve({ subfolderName, cancelled: false }); };
+
+                    footer.appendChild(backBtn);
+                    footer.appendChild(confirmBtn);
+                    dialog.appendChild(header);
+                    dialog.appendChild(body);
+                    dialog.appendChild(footer);
+                    modal.appendChild(dialog);
+                }
+
+                // ── Build and show ────────────────────────────────────────────────
+                const modal = document.createElement('div');
+                modal.id = 'exportPickerModal';
+                modal.style.cssText = MODAL_BG;
                 modal.onclick = (e) => { if (e.target === modal) { modal.remove(); resolve({ cancelled: true }); } };
-
                 document.body.appendChild(modal);
+                buildSelectionPhase();
             });
         }
 
