@@ -677,10 +677,10 @@
             white-space: nowrap;
         }
         .qlb-btn {
-            padding: 7px 10px;
+            padding: 7px 10px 7px 10px;
             border-radius: 4px;
             border: 1px solid var(--border);
-            background: rgba(255,255,255,0.05);
+            background: rgba(255,255,255,0.04);
             color: var(--text-muted);
             font-size: 11px;
             font-weight: 600;
@@ -688,12 +688,30 @@
             white-space: nowrap;
             text-align: left;
             width: 100%;
-            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
             min-height: 34px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            position: relative;
         }
-        .qlb-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
-        .qlb-btn.on { background:rgba(59,158,255,0.18); color:var(--accent-blue); border-color:rgba(59,158,255,0.45); }
-        .qlb-btn:active { opacity: 0.75; }
+        .qlb-btn:hover { background: rgba(255,255,255,0.09); color: var(--text-primary); }
+        /* ON state set via JS with inline vars — see _updateQuickLayerBar */
+        .qlb-btn.qlb-on {
+            font-weight: 700;
+            letter-spacing: 0.01em;
+        }
+        .qlb-btn.qlb-off {
+            opacity: 0.55;
+        }
+        .qlb-btn.qlb-off:hover { opacity: 1; }
+        .qlb-btn:active { opacity: 0.7 !important; transform: scale(0.97); }
+        .qlb-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            transition: opacity 0.15s;
+        }
 
         
         #quickDrawBar {
@@ -1975,7 +1993,7 @@
         
         <div id="quickLayerBar" style="display:none;">
             <div class="qlb-section-label">Layers</div>
-            <button class="qlb-btn" id="qlb-MARKUP" onclick="quickLayerToggle('MARKUP')" title="Toggle markup layers">Markup</button>
+            <button class="qlb-btn" id="qlb-MARKUP" onclick="quickLayerToggle('MARKUP')" title="Toggle markup layers"><span class="qlb-dot" style="background:#3b9eff;opacity:0.35;"></span>Markup</button>
         </div>
     </div>
 
@@ -4277,6 +4295,36 @@
             // Remove all dynamic buttons (everything except section label and markup btn)
             Array.from(bar.querySelectorAll('.qlb-btn:not(#qlb-MARKUP)')).forEach(b => b.remove());
 
+            // Helper: parse a 6-digit hex colour into rgba() string with given alpha
+            function hexToRgba(hex, alpha) {
+                const h = (hex || '#ffffff').replace('#', '');
+                const r = parseInt(h.slice(0, 2), 16) || 128;
+                const g = parseInt(h.slice(2, 4), 16) || 128;
+                const b = parseInt(h.slice(4, 6), 16) || 128;
+                return `rgba(${r},${g},${b},${alpha})`;
+            }
+
+            // Helper: apply ON/OFF visual state to a button
+            function applyBtnState(btn, dot, isOn, color) {
+                if (isOn) {
+                    btn.classList.add('qlb-on');
+                    btn.classList.remove('qlb-off');
+                    btn.style.background    = hexToRgba(color, 0.18);
+                    btn.style.borderColor   = hexToRgba(color, 0.55);
+                    btn.style.color         = color;
+                    btn.style.boxShadow     = `inset 3px 0 0 ${color}`;
+                    if (dot) { dot.style.background = color; dot.style.opacity = '1'; }
+                } else {
+                    btn.classList.add('qlb-off');
+                    btn.classList.remove('qlb-on');
+                    btn.style.background    = 'rgba(255,255,255,0.04)';
+                    btn.style.borderColor   = 'rgba(255,255,255,0.1)';
+                    btn.style.color         = 'var(--text-muted)';
+                    btn.style.boxShadow     = 'none';
+                    if (dot) { dot.style.background = color; dot.style.opacity = '0.35'; }
+                }
+            }
+
             // Rebuild one button per configured layer type
             appSettings.layerTypes.forEach(typeCfg => {
                 const matching = drillLayers.filter(l => l.get('dataType') === typeCfg.id);
@@ -4286,37 +4334,60 @@
                 btn.id = 'qlb-' + typeCfg.id;
                 btn.className = 'qlb-btn';
                 btn.title = 'Toggle ' + typeCfg.keyword + ' layers';
-                btn.textContent = typeCfg.keyword;
+
+                // Colour dot
+                const dot = document.createElement('span');
+                dot.className = 'qlb-dot';
+                btn.appendChild(dot);
+
+                // Label
+                const label = document.createElement('span');
+                label.textContent = typeCfg.keyword;
+                btn.appendChild(label);
 
                 const anyVisible = matching.some(l => l.getVisible());
-                btn.style.color = anyVisible ? typeCfg.color : 'var(--text-muted)';
-                btn.style.borderColor = anyVisible ? typeCfg.color : 'var(--border)';
-                btn.style.background = anyVisible
-                    ? typeCfg.color + '28'
-                    : 'rgba(255,255,255,0.05)';
+                applyBtnState(btn, dot, anyVisible, typeCfg.color);
                 btn.onclick = function() { quickLayerToggle(typeCfg.id); };
 
-                // Insert before markup button
                 const markupBtn = document.getElementById('qlb-MARKUP');
                 bar.insertBefore(btn, markupBtn);
             });
 
-            // Show/hide bar based on whether any drill layers exist
+            // Show/hide bar based on whether any layers exist
             const hasDrill = drillLayers.length > 0;
             const liveMarkupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
             const importedMarkupLayers = drillLayers.filter(l => l.get('dataType') === 'MARKUP');
             const hasAnyMarkup = liveMarkupLayer || importedMarkupLayers.length > 0;
             bar.style.display = (hasDrill || hasAnyMarkup) ? 'flex' : 'none';
 
-            // Update markup button
+            // Update markup button (uses accent-blue, not a configurable colour)
             const markupBtn = document.getElementById('qlb-MARKUP');
             if (markupBtn) {
                 markupBtn.style.display = hasAnyMarkup ? '' : 'none';
                 const anyMarkupVisible = (liveMarkupLayer && liveMarkupLayer.getVisible()) ||
                     importedMarkupLayers.some(l => l.getVisible());
-                markupBtn.style.color = anyMarkupVisible ? 'var(--accent-blue)' : 'var(--text-muted)';
-                markupBtn.style.borderColor = anyMarkupVisible ? 'rgba(59,158,255,0.45)' : 'var(--border)';
-                markupBtn.style.background = anyMarkupVisible ? 'rgba(59,158,255,0.18)' : 'rgba(255,255,255,0.05)';
+                // Ensure markup button has a dot (it's a static HTML element, add once)
+                if (!markupBtn.querySelector('.qlb-dot')) {
+                    const dot = document.createElement('span');
+                    dot.className = 'qlb-dot';
+                    markupBtn.insertBefore(dot, markupBtn.firstChild);
+                }
+                const markupDot = markupBtn.querySelector('.qlb-dot');
+                if (anyMarkupVisible) {
+                    markupBtn.classList.add('qlb-on'); markupBtn.classList.remove('qlb-off');
+                    markupBtn.style.background  = 'rgba(59,158,255,0.18)';
+                    markupBtn.style.borderColor = 'rgba(59,158,255,0.55)';
+                    markupBtn.style.color       = 'var(--accent-blue)';
+                    markupBtn.style.boxShadow   = 'inset 3px 0 0 var(--accent-blue)';
+                    if (markupDot) { markupDot.style.background = 'var(--accent-blue)'; markupDot.style.opacity = '1'; }
+                } else {
+                    markupBtn.classList.add('qlb-off'); markupBtn.classList.remove('qlb-on');
+                    markupBtn.style.background  = 'rgba(255,255,255,0.04)';
+                    markupBtn.style.borderColor = 'rgba(255,255,255,0.1)';
+                    markupBtn.style.color       = 'var(--text-muted)';
+                    markupBtn.style.boxShadow   = 'none';
+                    if (markupDot) { markupDot.style.background = '#3b9eff'; markupDot.style.opacity = '0.35'; }
+                }
             }
         }
 
