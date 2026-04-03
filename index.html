@@ -910,10 +910,12 @@
         function registerServiceWorker() {
             if (!('serviceWorker' in navigator)) return;
             if (location.protocol === 'file:') return;
+            // FIX: add the message listener once at the top level, not inside the .then()
+            // which can fire multiple times on SW updates, stacking duplicate listeners.
+            navigator.serviceWorker.addEventListener('message', handleSWMessage);
             navigator.serviceWorker.register('./sw.js')
                 .then(reg => {
                     reg.update();
-                    navigator.serviceWorker.addEventListener('message', handleSWMessage);
 
                     const showUpdateToast = () => {
                         const toast = showToast('', 'success', 0);
@@ -1810,36 +1812,42 @@
 
         async function saveMarkupsToDB(markupSource) {
             if (!db) return;
-            await dbClear('markups');
+            // FIX: Previously each feature opened its own IDB transaction (one await per feature).
+            // For 100 markups that's 101 sequential round-trips. Now clear + write all in one transaction.
             const features = markupSource.getFeatures();
-            for (const f of features) {
+            const rows = features.map(f => {
                 const geom = f.getGeometry();
                 const style = f.getStyle();
                 let color = currentMarkupColor;
                 try {
-                    const geomType = geom.getType();
-                    if (geomType === 'LineString') {
-                        
+                    if (geom.getType() === 'LineString') {
                         if (style && style.getStroke && style.getStroke()) {
                             const sc = style.getStroke().getColor();
                             if (sc) color = sc;
                         }
                     } else {
-                        
                         if (style && style.getImage && style.getImage()) {
                             const fill = style.getImage().getFill();
                             if (fill) color = fill.getColor();
                         }
                     }
                 } catch(e) {}
-                await dbSave('markups', {
+                return {
                     type: geom.getType(),
                     coords: geom.getCoordinates(),
-                    color: color,
+                    color,
                     origin: f.get('origin') || 'new',
                     ts: f.get('ts') || new Date().toISOString()
-                });
-            }
+                };
+            });
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction('markups', 'readwrite');
+                const store = tx.objectStore('markups');
+                store.clear();
+                rows.forEach(row => store.put(row));
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
         }
 
         async function loadMarkupsFromDB(markupSource) {
@@ -2521,6 +2529,9 @@
                             <div class="scard-title" style="color:#fca5a5;">⚠️ Danger Zone</div>
                             <div class="scard-hint">Reset all settings to factory defaults. This cannot be undone.</div>
                             <button class="action-button" style="background:#7f1d1d;border:1px solid rgba(252,165,165,0.2);margin-top:14px;max-width:260px;" onclick="resetSettingsToDefaults()">↺ Reset All Settings to Defaults</button>
+                            <hr style="margin:16px 0;">
+                            <div class="scard-hint">Force-unregister the service worker and clear the app shell cache, then reload. Use this if the app is stuck, showing stale UI, or behaving unexpectedly. Your map data and tile cache are <strong style="color:var(--text-primary);">not</strong> affected.</div>
+                            <button class="action-button" style="background:#7f1d1d;border:1px solid rgba(252,165,165,0.2);margin-top:10px;max-width:260px;" onclick="hardReloadPWA()">🔄 Force Reload App (Hard Reset SW)</button>
                         </div>
 
                     </div>
@@ -2688,9 +2699,11 @@
 
         window.addEventListener('online', () => {
             updateNetworkStatus(true);
-            showToast('✅ Connection restored', 'success');
-            if (map) map.getLayers().forEach(l => { if (l.getSource && l.getSource() && l.getSource().refresh) l.getSource().refresh(); });
-            // Flush any queued CSV copies now that we're back online
+            // FIX: only refresh remote tile sources (skip Grey Canvas which is locally generated)
+            if (map) map.getLayers().forEach(l => {
+                if (l.getVisible() && l.get('title') !== 'Grey Canvas' && l.getSource && l.getSource() && l.getSource().refresh)
+                    l.getSource().refresh();
+            });
             processExportQueue().catch(() => {});
         });
 
@@ -2736,24 +2749,29 @@
                 }
             }
 
+            // FIX: Build the image object once per layer config, not once per feature per frame.
+            // Previously buildImage() was called inside the style function, allocating a new
+            // RegularShape/Circle on every render pass for every visible feature.
+            const _cachedImage = buildImage();
+            const _baseStyle = new ol.style.Style({ image: _cachedImage });
+            // Pre-build shared text decoration objects (only used for label layers)
+            const _textFill   = new ol.style.Fill({ color: 'black' });
+            const _textStroke = new ol.style.Stroke({ color: 'white', width: 2 });
+
             return function(feature) {
-                const styles = [new ol.style.Style({ image: buildImage() })];
-                if (typeCfg.showLabel) {
-                    const holeId = feature.get('attributes') ? feature.get('attributes')[getHoleIdKey()] : null;
-                    if (holeId) {
-                        styles.push(new ol.style.Style({
-                            text: new ol.style.Text({
-                                text: String(holeId),
-                                font: `${currentHoleLabelSize} sans-serif`,
-                                fill: new ol.style.Fill({ color: 'black' }),
-                                stroke: new ol.style.Stroke({ color: 'white', width: 2 }),
-                                offsetX: 0, offsetY: radius + 7,
-                                textAlign: 'center', textBaseline: 'middle'
-                            })
-                        }));
-                    }
-                }
-                return styles;
+                if (!typeCfg.showLabel) return [_baseStyle]; // FIX: return cached style directly
+                const holeId = feature.get('attributes') ? feature.get('attributes')[getHoleIdKey()] : null;
+                if (!holeId) return [_baseStyle];
+                return [_baseStyle, new ol.style.Style({
+                    text: new ol.style.Text({
+                        text: String(holeId),
+                        font: `${currentHoleLabelSize} sans-serif`,
+                        fill: _textFill,
+                        stroke: _textStroke,
+                        offsetX: 0, offsetY: radius + 7,
+                        textAlign: 'center', textBaseline: 'middle'
+                    })
+                })];
             };
         }
 
@@ -2790,10 +2808,24 @@
             });
         }
 
+        // FIX: Cache the default markup style so the style function doesn't allocate
+        // a new ol.style.Style object on every render frame for every feature.
+        // Cache is invalidated whenever the active markup colour changes.
+        let _cachedDefaultMarkupStyle = null;
+        let _cachedDefaultMarkupColor = null;
+        function getDefaultMarkupStyle() {
+            if (!_cachedDefaultMarkupStyle || _cachedDefaultMarkupColor !== currentMarkupColor) {
+                _cachedDefaultMarkupStyle = createMarkupStyle(currentMarkupColor);
+                _cachedDefaultMarkupColor = currentMarkupColor;
+            }
+            return _cachedDefaultMarkupStyle;
+        }
+
         window.setMarkupColor = function(color, swatchEl) { setMarkupColorAll(color, swatchEl); };
 
         window.setMarkupColorAll = function(color, clickedEl) {
             currentMarkupColor = color;
+            _cachedDefaultMarkupStyle = null; // FIX: invalidate cached style on colour change
             const hex = color.startsWith('#') ? color : '#f7a800';
             
             const picker1 = document.getElementById('customColorPicker');
@@ -2820,23 +2852,29 @@
             
             
             
+            // FIX: Build grey canvas tile once and reuse the same data URL for all tiles.
+            // Previously a new <canvas> was created and destroyed for every tile on every
+            // pan/zoom, creating heavy GC pressure. Now it's created once at startup.
+            const _greyTileDataUrl = (function() {
+                const c = document.createElement('canvas');
+                c.width = 256; c.height = 256;
+                const ctx = c.getContext('2d');
+                ctx.fillStyle = '#d6d8db';
+                ctx.fillRect(0, 0, 256, 256);
+                ctx.strokeStyle = 'rgba(160,163,168,0.6)';
+                ctx.lineWidth = 0.5;
+                for (let i = 0; i <= 256; i += 32) {
+                    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
+                }
+                ctx.strokeStyle = 'rgba(140,143,148,0.45)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(0, 0, 256, 256);
+                return c.toDataURL();
+            })();
             const greyCanvasSource = new ol.source.XYZ({
                 tileLoadFunction: function(imageTile) {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = 256; canvas.height = 256;
-                    const ctx = canvas.getContext('2d');
-                    ctx.fillStyle = '#d6d8db';
-                    ctx.fillRect(0, 0, 256, 256);
-                    ctx.strokeStyle = 'rgba(160,163,168,0.6)';
-                    ctx.lineWidth = 0.5;
-                    for (let i = 0; i <= 256; i += 32) {
-                        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
-                        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
-                    }
-                    ctx.strokeStyle = 'rgba(140,143,148,0.45)';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(0, 0, 256, 256);
-                    imageTile.getImage().src = canvas.toDataURL();
+                    imageTile.getImage().src = _greyTileDataUrl;
                 },
                 url: 'https://example.com/grey/{z}/{x}/{y}.png'
             });
@@ -2870,7 +2908,7 @@
                 source: markupSource,
                 style: function(feature) {
                     if (feature.getStyle()) return feature.getStyle();
-                    return createMarkupStyle(currentMarkupColor);
+                    return getDefaultMarkupStyle(); // FIX: use cached style, not a new allocation per frame
                 },
                 zIndex: 100
             });
@@ -2936,9 +2974,11 @@
         }
 
         function scheduleMarkupSave(markupSource) {
+            _hasUnsavedMarkups = true; // FIX: flag unsaved state so beforeunload fires correctly
             if (markupAutoSaveTimer) clearTimeout(markupAutoSaveTimer);
             markupAutoSaveTimer = setTimeout(async () => {
                 await saveMarkupsToDB(markupSource);
+                _hasUnsavedMarkups = false; // saved — unblock clean close
                 updateSavedMarkupsCount();
             }, 1000);
         }
@@ -3034,8 +3074,10 @@
         };
 
         function getTileRange(minLon, minLat, maxLon, maxLat, zoom) {
-            const toTileX = lon => Math.floor((lon + 180) / 360 * Math.pow(2, zoom));
-            const toTileY = lat => Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+            // FIX: compute 2^zoom once (was computed 4× via Math.pow) and use bit shift (integer zoom always)
+            const tiles = 1 << zoom;
+            const toTileX = lon => Math.floor((lon + 180) / 360 * tiles);
+            const toTileY = lat => Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * tiles);
             return {
                 minX: toTileX(minLon),
                 maxX: toTileX(maxLon),
@@ -3097,17 +3139,19 @@
         let _tapPointerDownHandler = null, _tapPointerMoveHandler = null, _tapPointerUpHandler = null;
 
         function _removeTapPointHandlers() {
-            const canvas = map.getViewport().querySelector('canvas');
-            if (!canvas) return;
-            if (_tapPointerDownHandler) { canvas.removeEventListener('pointerdown', _tapPointerDownHandler); _tapPointerDownHandler = null; }
-            if (_tapPointerMoveHandler) { canvas.removeEventListener('pointermove', _tapPointerMoveHandler); _tapPointerMoveHandler = null; }
-            if (_tapPointerUpHandler)   { canvas.removeEventListener('pointerup',   _tapPointerUpHandler);   _tapPointerUpHandler = null; }
+            // FIX: handlers are on the viewport div (persists forever), not the inner canvas
+            // (which OL can recreate on resize/visibility change, silently breaking the handlers)
+            const viewport = map.getViewport();
+            if (!viewport) return;
+            if (_tapPointerDownHandler) { viewport.removeEventListener('pointerdown', _tapPointerDownHandler); _tapPointerDownHandler = null; }
+            if (_tapPointerMoveHandler) { viewport.removeEventListener('pointermove', _tapPointerMoveHandler); _tapPointerMoveHandler = null; }
+            if (_tapPointerUpHandler)   { viewport.removeEventListener('pointerup',   _tapPointerUpHandler);   _tapPointerUpHandler = null; }
         }
 
         function _installTapPointHandlers(markupSource) {
             _removeTapPointHandlers();
-            const canvas = map.getViewport().querySelector('canvas');
-            if (!canvas) return;
+            const viewport = map.getViewport();
+            if (!viewport) return;
 
             _tapPointerDownHandler = function(e) {
                 _tapPointerId = e.pointerId;
@@ -3126,10 +3170,11 @@
             _tapPointerUpHandler = function(e) {
                 if (e.pointerId !== _tapPointerId) return;
                 _tapPointerId = null;
-                if (_tapMoved) return; 
+                if (_tapMoved) return;
 
-                
-                const rect = canvas.getBoundingClientRect();
+                // FIX: re-query canvas at event time, not at install time
+                const canvas = map.getViewport().querySelector('canvas');
+                const rect = canvas ? canvas.getBoundingClientRect() : viewport.getBoundingClientRect();
                 const pixel = [e.clientX - rect.left, e.clientY - rect.top];
                 const coord = map.getCoordinateFromPixel(pixel);
                 if (!coord) return;
@@ -3142,12 +3187,13 @@
                 feature.setStyle(createMarkupStyle(currentMarkupColor));
                 markupSource.addFeature(feature);
                 undoStack.push({ feature, source: markupSource });
+                if (undoStack.length > 50) undoStack.shift(); // FIX: cap undo stack
                 updateUndoBtn();
             };
 
-            canvas.addEventListener('pointerdown', _tapPointerDownHandler);
-            canvas.addEventListener('pointermove', _tapPointerMoveHandler);
-            canvas.addEventListener('pointerup',   _tapPointerUpHandler);
+            viewport.addEventListener('pointerdown', _tapPointerDownHandler);
+            viewport.addEventListener('pointermove', _tapPointerMoveHandler);
+            viewport.addEventListener('pointerup',   _tapPointerUpHandler);
         }
 
         
@@ -3156,17 +3202,18 @@
         let _erasePointerDownHandler = null, _erasePointerMoveHandler = null, _erasePointerUpHandler = null;
 
         function _removeEraseHandlers() {
-            const canvas = map.getViewport() && map.getViewport().querySelector('canvas');
-            if (!canvas) return;
-            if (_erasePointerDownHandler) { canvas.removeEventListener('pointerdown', _erasePointerDownHandler); _erasePointerDownHandler = null; }
-            if (_erasePointerMoveHandler) { canvas.removeEventListener('pointermove', _erasePointerMoveHandler); _erasePointerMoveHandler = null; }
-            if (_erasePointerUpHandler)   { canvas.removeEventListener('pointerup',   _erasePointerUpHandler);   _erasePointerUpHandler = null; }
+            // FIX: use viewport div, not inner canvas (same reason as tap handlers)
+            const viewport = map.getViewport && map.getViewport();
+            if (!viewport) return;
+            if (_erasePointerDownHandler) { viewport.removeEventListener('pointerdown', _erasePointerDownHandler); _erasePointerDownHandler = null; }
+            if (_erasePointerMoveHandler) { viewport.removeEventListener('pointermove', _erasePointerMoveHandler); _erasePointerMoveHandler = null; }
+            if (_erasePointerUpHandler)   { viewport.removeEventListener('pointerup',   _erasePointerUpHandler);   _erasePointerUpHandler = null; }
         }
 
         function _installEraseHandlers() {
             _removeEraseHandlers();
-            const canvas = map.getViewport().querySelector('canvas');
-            if (!canvas) return;
+            const viewport = map.getViewport();
+            if (!viewport) return;
 
             _erasePointerDownHandler = function(e) {
                 _erasePointerId = e.pointerId;
@@ -3182,9 +3229,11 @@
             _erasePointerUpHandler = function(e) {
                 if (e.pointerId !== _erasePointerId) return;
                 _erasePointerId = null;
-                if (_eraseMoved) return; 
+                if (_eraseMoved) return;
 
-                const rect = canvas.getBoundingClientRect();
+                // FIX: re-query canvas at event time
+                const canvas = map.getViewport().querySelector('canvas');
+                const rect = canvas ? canvas.getBoundingClientRect() : viewport.getBoundingClientRect();
                 const tapPixel = [e.clientX - rect.left, e.clientY - rect.top];
                 const tapCoord = map.getCoordinateFromPixel(tapPixel);
                 if (!tapCoord) return;
@@ -3217,9 +3266,9 @@
                 showToast('🧹 Markup erased', '');
             };
 
-            canvas.addEventListener('pointerdown', _erasePointerDownHandler);
-            canvas.addEventListener('pointermove', _erasePointerMoveHandler);
-            canvas.addEventListener('pointerup',   _erasePointerUpHandler);
+            viewport.addEventListener('pointerdown', _erasePointerDownHandler);
+            viewport.addEventListener('pointermove', _erasePointerMoveHandler);
+            viewport.addEventListener('pointerup',   _erasePointerUpHandler);
         }
 
         function addDrawInteraction(type) {
@@ -3259,6 +3308,7 @@
                     event.feature.set('ts', new Date().toISOString());
                     event.feature.setStyle(createMarkupStyle(currentMarkupColor));
                     undoStack.push({ feature: event.feature, source: markupSource });
+                    if (undoStack.length > 50) undoStack.shift(); // FIX: cap undo stack at 50
                     updateUndoBtn();
                     selectInteraction.setActive(true);
                     modifyInteraction.setActive(true);
@@ -3892,7 +3942,7 @@
                     document.querySelectorAll('[id^="drawBtn-"]').forEach(b => { b.style.background = '#1e293b'; b.style.borderColor = 'var(--border)'; b.style.color = 'var(--text-primary)'; });
                     document.querySelectorAll('[id^="qdb-"]').forEach(b => b.classList.remove('active'));
                 }
-                if (panelName === 'Manager') updateLayerListUI();
+                if (panelName === 'Manager') _updateLayerListUI(); // immediate on panel open, not debounced
                 if (panelName === 'Offline') {
                     updateConnectionStatusCard();
                     updateTileCacheCount();
@@ -3944,7 +3994,7 @@
             const source = new ol.source.Vector({ wrapX: false });
             const layerStyle = function(feature) {
                 if (feature.getStyle()) return feature.getStyle();
-                return createMarkupStyle(currentMarkupColor);
+                return getDefaultMarkupStyle(); // FIX: use cached style
             };
             const newLayer = new ol.layer.Vector({
                 title: fileName,
@@ -4060,7 +4110,22 @@
             updateLayerListUI();
         };
 
+        // FIX: Debounce layer UI rebuilds. updateLayerListUI and updateQuickLayerBar are
+        // called from many places (including layer visibility toggles during map interaction).
+        // Doing a full DOM rebuild synchronously causes layout thrash. Debouncing at 80ms
+        // batches rapid successive calls into a single update.
+        let _layerListUITimer = null;
+        let _quickLayerBarTimer = null;
         function updateLayerListUI() {
+            clearTimeout(_layerListUITimer);
+            _layerListUITimer = setTimeout(_updateLayerListUI, 80);
+        }
+        function updateQuickLayerBar() {
+            clearTimeout(_quickLayerBarTimer);
+            _quickLayerBarTimer = setTimeout(_updateQuickLayerBar, 80);
+        }
+
+        function _updateLayerListUI() {
             const listDiv = document.getElementById('layerList');
             listDiv.innerHTML = `
                 <div style="padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:10px;">
@@ -4151,7 +4216,7 @@
                 listDiv.innerHTML += '<p style="font-size:11px; color:var(--text-muted); margin-top:8px;">No layers loaded.</p>';
             }
 
-            updateQuickLayerBar();
+            _updateQuickLayerBar(); // call raw version — already inside a debounced path
         }
 
         window.toggleLayerVisibility = function(layerTitle) {
@@ -4204,7 +4269,7 @@
             map.getView().fit(extent, { padding: [60, 60, 60, 60], duration: 800, maxZoom: 19 });
         };
 
-        function updateQuickLayerBar() {
+        function _updateQuickLayerBar() {
             const bar = document.getElementById('quickLayerBar');
             if (!bar) return;
             const drillLayers = drillDataLayerGroup.getLayers().getArray();
@@ -4561,6 +4626,13 @@
 
             watchId = navigator.geolocation.watchPosition(function(position) {
                 if (!isGpsActive) { navigator.geolocation.clearWatch(watchId); return; }
+
+                // FIX: debounce GPS updates — mobile GPS can fire many times/second,
+                // each triggering a full OL re-render. 500ms is plenty for field use.
+                const _now = Date.now();
+                if (!gpsFirstFix && _now - (watchId._lastUpdate || 0) < 500) return;
+                watchId._lastUpdate = _now;
+
                 const accuracy = position.coords.accuracy;
                 const lonLat = [position.coords.longitude, position.coords.latitude];
                 const webMercatorCoords = ol.proj.fromLonLat(lonLat);
@@ -4634,11 +4706,41 @@
             showToast('⏳ Waiting for GPS fix…', '');
         };
 
+        // FIX: Only block page unload when there are actual unsaved markups.
+        // Previously this always fired, which also blocked programmatic reloads
+        // (like hardReloadPWA) and prevented the browser from cleanly releasing
+        // memory when closing — contributing to lingering processes on mobile.
+        let _hasUnsavedMarkups = false;
         window.addEventListener('beforeunload', function(e) {
+            if (!_hasUnsavedMarkups) return; // don't block clean closes
             e.preventDefault();
             e.returnValue = 'You have unsaved data. Are you sure you want to leave?';
             return e.returnValue;
         });
+
+        // FIX: Hard reload — unregisters the SW and clears the app shell cache,
+        // then does a full reload. Fixes stuck/stale UI without wiping map data or tiles.
+        window.hardReloadPWA = async function() {
+            if (!confirm('Force-reload the app?\n\nThis will clear the app cache and restart. Your map data, markups, and tile cache are NOT affected.')) return;
+            try {
+                _hasUnsavedMarkups = false; // prevent beforeunload blocking the reload
+                showToast('🔄 Clearing app cache…', '', 4000);
+                if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map(r => r.unregister()));
+                }
+                // Clear app shell caches only — preserve tile cache and IDB data
+                const keys = await caches.keys();
+                await Promise.all(
+                    keys
+                        .filter(k => k !== 'field-map-tiles-v1') // keep tile cache
+                        .map(k => caches.delete(k))
+                );
+                window.location.reload(true);
+            } catch(err) {
+                showToast(`❌ Hard reload failed: ${err.message}`, 'error', 6000);
+            }
+        };
 
         async function loadSettings() {
             try {
