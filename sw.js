@@ -1,4 +1,4 @@
-const CACHE = "field-map-v13";
+const CACHE = "field-map-v14";
 const TILE_CACHE = "field-map-tiles-v1";
 const OFFLINE_PAGE = "offline.html";
 
@@ -148,13 +148,20 @@ async function handleCacheTiles(event) {
   const cache = await caches.open(TILE_CACHE);
   let done = 0;
   const total = urls.length;
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, { mode: "no-cors" });
-      await cache.put(url, response);
-    } catch (e) {}
-    done++;
-    event.source.postMessage({ type: "CACHE_PROGRESS", done, total });
+  // FIX: fetch tiles in concurrent batches of 8 instead of one-at-a-time.
+  // Sequential fetching of 1000 tiles at ~100ms each = 100 seconds.
+  // 8-concurrent batches cuts that to ~12 seconds with no extra memory pressure.
+  const CONCURRENCY = 8;
+  for (let i = 0; i < urls.length; i += CONCURRENCY) {
+    const batch = urls.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async url => {
+      try {
+        const response = await fetch(url, { mode: 'no-cors' });
+        await cache.put(url, response);
+      } catch (e) {}
+      done++;
+      event.source.postMessage({ type: "CACHE_PROGRESS", done, total });
+    }));
   }
   event.source.postMessage({ type: "CACHE_DONE", total });
 }
