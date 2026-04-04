@@ -3252,8 +3252,7 @@
                 if (_tapMoved) return;
 
                 // FIX: re-query canvas at event time, not at install time
-                const canvas = map.getViewport().querySelector('canvas');
-                const rect = canvas ? canvas.getBoundingClientRect() : viewport.getBoundingClientRect();
+                const rect = viewport.getBoundingClientRect();
                 const pixel = [e.clientX - rect.left, e.clientY - rect.top];
                 const coord = map.getCoordinateFromPixel(pixel);
                 if (!coord) return;
@@ -3311,8 +3310,7 @@
                 if (_eraseMoved) return;
 
                 // FIX: re-query canvas at event time
-                const canvas = map.getViewport().querySelector('canvas');
-                const rect = canvas ? canvas.getBoundingClientRect() : viewport.getBoundingClientRect();
+                const rect = viewport.getBoundingClientRect();
                 const tapPixel = [e.clientX - rect.left, e.clientY - rect.top];
                 const tapCoord = map.getCoordinateFromPixel(tapPixel);
                 if (!tapCoord) return;
