@@ -2778,10 +2778,21 @@
 
         window.addEventListener('online', () => {
             updateNetworkStatus(true);
-            // FIX: only refresh remote tile sources (skip Grey Canvas which is locally generated)
+            // FIX: only refresh remote *tile* layers on reconnect.
+            // Calling refresh() on in-memory ol.source.Vector (markups, drill
+            // data, imported CSVs) clears all features because there is no
+            // remote URL to re-fetch from — this was causing drawn lines and
+            // points to vanish on wifi↔LTE handovers.
             if (map) map.getLayers().forEach(l => {
-                if (l.getVisible() && l.get('title') !== 'Grey Canvas' && l.getSource && l.getSource() && l.getSource().refresh)
-                    l.getSource().refresh();
+                if (!l.getVisible()) return;
+                if (l.get('title') === 'Grey Canvas') return;
+                const src = l.getSource && l.getSource();
+                if (!src || !src.refresh) return;
+                // Only refresh tile / image sources, never client-side Vector sources
+                if (src instanceof ol.source.Vector) return;
+                // Also skip the Group layer (drill data) — its children are all Vector
+                if (l instanceof ol.layer.Group) return;
+                src.refresh();
             });
             processExportQueue().catch(() => {});
         });
@@ -3251,9 +3262,10 @@
                 _tapPointerId = null;
                 if (_tapMoved) return;
 
-                // FIX: re-query canvas at event time, not at install time
-                const rect = viewport.getBoundingClientRect();
-                const pixel = [e.clientX - rect.left, e.clientY - rect.top];
+                // FIX: use OL's getEventPixel which correctly accounts for
+                // viewport offset, CSS transforms, and device-pixel-ratio —
+                // manual canvas.getBoundingClientRect() drifts on mobile.
+                const pixel = map.getEventPixel(e);
                 const coord = map.getCoordinateFromPixel(pixel);
                 if (!coord) return;
 
@@ -3309,9 +3321,8 @@
                 _erasePointerId = null;
                 if (_eraseMoved) return;
 
-                // FIX: re-query canvas at event time
-                const rect = viewport.getBoundingClientRect();
-                const tapPixel = [e.clientX - rect.left, e.clientY - rect.top];
+                // FIX: use OL's getEventPixel for correct pixel on all devices
+                const tapPixel = map.getEventPixel(e);
                 const tapCoord = map.getCoordinateFromPixel(tapPixel);
                 if (!tapCoord) return;
 
