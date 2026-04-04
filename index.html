@@ -925,6 +925,8 @@
     </style>
     
     <script>
+        const APP_VERSION = 'v1.7.0';
+
         function registerServiceWorker() {
             if (!('serviceWorker' in navigator)) return;
             if (location.protocol === 'file:') return;
@@ -2623,7 +2625,7 @@
                 display:flex; align-items:center; justify-content:space-between;
                 padding:14px 24px; border-top:1px solid rgba(255,255,255,0.08);
                 background:#0d1120; flex-shrink:0; gap:10px; flex-wrap:wrap;">
-                <div style="font-size:11px;color:var(--text-muted);">Changes apply immediately after saving.</div>
+                <div style="font-size:11px;color:var(--text-muted);">Changes apply immediately after saving.<br><span id="appVersionLabel" style="font-family:var(--font-mono);color:rgba(136,153,170,0.6);font-size:10px;"></span></div>
                 <div style="display:flex;gap:8px;">
                     <button onclick="closeSettingsModal()" style="
                         background:transparent;border:1px solid rgba(255,255,255,0.15);
@@ -2707,6 +2709,7 @@
         let drillDataLayerGroup;
         let markupAutoSaveTimer = null;
         let watchId = null;
+        let _lastGpsUpdateTs = 0;
         let isOnline = navigator.onLine;
         let undoStack = [];           
         let gpsFirstFix = true;       
@@ -3400,6 +3403,9 @@
                     updateUndoBtn();
                     selectInteraction.setActive(true);
                     modifyInteraction.setActive(true);
+                    // FIX: re-enable dragPan after freehand draw completes —
+                    // it was disabled at line entry for freehand mode, so without
+                    // this the user can't pan the map until they switch tools.
                     if (dragPanInteraction) dragPanInteraction.setActive(true);
                 });
             } else {
@@ -3431,6 +3437,8 @@
             };
             populateSettingsPanel();
             checkGPSPermission();
+            const vLabel = document.getElementById('appVersionLabel');
+            if (vLabel) vLabel.textContent = 'Field Map ' + APP_VERSION;
         };
 
         window.closeSettingsModal = function() {
@@ -3722,8 +3730,6 @@
             if (!files.length) { statusEl.textContent = 'No CSV files found in selected folder.'; return; }
             statusEl.textContent = `Found ${files.length} CSV(s) — loading…`;
 
-            
-            const fakeEvent = { target: { files } };
             handleCSVUploadFiles(files, statusEl);
         };
 
@@ -4799,6 +4805,7 @@
             }
             isGpsActive = true;
             gpsFirstFix = true;
+            _lastGpsUpdateTs = 0; // reset debounce so first fix is never throttled
             document.getElementById('gpsLabel').textContent = 'GPS Active';
             document.getElementById('gpsStartButton').classList.add('active');
 
@@ -4834,9 +4841,11 @@
 
                 // FIX: debounce GPS updates — mobile GPS can fire many times/second,
                 // each triggering a full OL re-render. 500ms is plenty for field use.
+                // NOTE: watchId is a primitive number (from watchPosition), so we use
+                // a separate variable — setting properties on a primitive is a silent no-op.
                 const _now = Date.now();
-                if (!gpsFirstFix && _now - (watchId._lastUpdate || 0) < 500) return;
-                watchId._lastUpdate = _now;
+                if (!gpsFirstFix && _now - (_lastGpsUpdateTs || 0) < 500) return;
+                _lastGpsUpdateTs = _now;
 
                 const accuracy = position.coords.accuracy;
                 const lonLat = [position.coords.longitude, position.coords.latitude];
@@ -4877,8 +4886,6 @@
 
                 const dotFeat = new ol.Feature({ geometry: new ol.geom.Point(webMercatorCoords), gpsType: 'dot' });
                 gpsLayer.getSource().addFeature(dotFeat);
-
-                window._lastGpsCoords = webMercatorCoords;
 
                 if (gpsFirstFix) {
                     gpsFirstFix = false;
