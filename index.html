@@ -37,6 +37,7 @@
             --radius: 6px;
             --font: 'DM Sans', Arial, sans-serif;
             --font-mono: 'DM Mono', monospace;
+            --qdb-scale: 1;
         }
 
         html, body {
@@ -713,12 +714,12 @@
             margin: 3px 0;
         }
         .qdb-btn {
-            width: 40px; height: 40px;
+            width: calc(40px * var(--qdb-scale)); height: calc(40px * var(--qdb-scale));
             border-radius: var(--radius);
             border: 2px solid var(--border);
             background: var(--bg-panel);
             color: var(--text-primary);
-            font-size: 15px;
+            font-size: calc(15px * var(--qdb-scale));
             cursor: pointer;
             display: flex; align-items: center; justify-content: center;
             box-shadow: 0 2px 8px rgba(0,0,0,0.45);
@@ -726,7 +727,7 @@
             position: relative;
             user-select: none;
         }
-        .qdb-btn svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
+        .qdb-btn svg { width: calc(18px * var(--qdb-scale)); height: calc(18px * var(--qdb-scale)); fill: currentColor; flex-shrink: 0; }
         .qdb-btn:active { transform: scale(0.91); }
         .qdb-btn.active {
             background: var(--accent-orange);
@@ -736,7 +737,7 @@
         .qdb-btn:hover::after {
             content: attr(data-tip);
             position: absolute;
-            left: 48px; top: 50%; transform: translateY(-50%);
+            left: calc(40px * var(--qdb-scale) + 8px); top: 50%; transform: translateY(-50%);
             background: rgba(0,0,0,0.85); color: #fff;
             font-size: 11px; font-weight: 600; white-space: nowrap;
             padding: 4px 9px; border-radius: 4px;
@@ -747,7 +748,7 @@
         .qdb-swatch:hover::after {
             content: attr(data-tip);
             position: absolute;
-            left: 34px; top: 50%; transform: translateY(-50%);
+            left: calc(26px * var(--qdb-scale) + 8px); top: 50%; transform: translateY(-50%);
             background: rgba(0,0,0,0.85); color: #fff;
             font-size: 11px; font-weight: 600; white-space: nowrap;
             padding: 4px 9px; border-radius: 4px;
@@ -756,7 +757,7 @@
         }
         
         .qdb-swatch {
-            width: 26px; height: 26px;
+            width: calc(26px * var(--qdb-scale)); height: calc(26px * var(--qdb-scale));
             border-radius: 50%;
             border: 2px solid transparent;
             cursor: pointer;
@@ -766,7 +767,7 @@
         }
         .qdb-swatch:hover, .qdb-swatch.selected { border-color: white; transform: scale(1.2); }
         #qdb-colorPicker {
-            width: 26px; height: 26px;
+            width: calc(26px * var(--qdb-scale)); height: calc(26px * var(--qdb-scale));
             border-radius: 50%;
             border: 2px solid var(--border);
             padding: 0; cursor: pointer;
@@ -904,6 +905,16 @@
 
         /* Close modal on backdrop click */
         #settingsModal { cursor: default; }
+
+        /* Layout Flipped overrides */
+        body.layout-flipped .widget-panel { right: auto; left: 0; border-radius: 0 0 10px 0; border-left: none; border-right: 1px solid var(--border); box-shadow: 4px 4px 20px rgba(0,0,0,0.5); }
+        body.layout-flipped #quickDrawBar { left: auto; right: 10px; }
+        body.layout-flipped .location-indicator { left: auto; right: 10px; }
+        body.layout-flipped #zoomToMeButton { left: auto; right: 10px; }
+        body.layout-flipped #layerSwitcher { right: auto; left: 20px; align-items: flex-start; }
+        body.layout-flipped #quickLayerBar { align-self: flex-start; }
+        body.layout-flipped .qdb-btn:hover::after { left: auto; right: calc(40px * var(--qdb-scale) + 8px); }
+        body.layout-flipped .qdb-swatch:hover::after { left: auto; right: calc(26px * var(--qdb-scale) + 8px); }
     </style>
     
     <script>
@@ -2371,6 +2382,59 @@
                     <div class="sg-grid2">
 
                         <div class="scard">
+                            <div class="scard-title">🔀 UI Layout</div>
+                            <div class="scard-hint">Swap the left and right toolbars.</div>
+                            <select id="settingsUILayout" class="sinput" style="margin-top:10px;cursor:pointer;">
+                                <option value="default">Tools Left, Panels Right</option>
+                                <option value="flipped">Panels Left, Tools Right</option>
+                            </select>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">🖱️ Drawing Button Size</div>
+                            <div class="scard-hint">Scale the UI button sizes on the quick draw bar.</div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+                                <input type="range" id="settingsQdbScale" min="0.5" max="2.0" step="0.1" style="flex:1;" oninput="document.getElementById('settingsQdbScaleVal').textContent=this.value+'x'; document.documentElement.style.setProperty('--qdb-scale', this.value);">
+                                <span id="settingsQdbScaleVal" class="sval-badge"></span>
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">📐 Markup Stroke & Point Sizes</div>
+                            <div class="scard-hint">Change the map rendering size for lines and points.</div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+                                <span class="slabel" style="width:60px;margin:0;">Line Width</span>
+                                <input type="range" id="settingsMarkupStroke" min="1" max="15" step="1" style="flex:1;" oninput="document.getElementById('settingsMarkupStrokeVal').textContent=this.value+'px'">
+                                <span id="settingsMarkupStrokeVal" class="sval-badge"></span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+                                <span class="slabel" style="width:60px;margin:0;">Point Size</span>
+                                <input type="range" id="settingsMarkupPoint" min="5" max="25" step="1" style="flex:1;" oninput="document.getElementById('settingsMarkupPointVal').textContent=this.value+'px'">
+                                <span id="settingsMarkupPointVal" class="sval-badge"></span>
+                            </div>
+                        </div>
+
+                        <div class="scard">
+                            <div class="scard-title">🛠 Enabled Drawing Tools</div>
+                            <div class="scard-hint">Show or hide specific tools in the quick draw bar.</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);"><input type="checkbox" id="setToolPoint" style="width:16px;height:16px;accent-color:var(--accent-blue);"> Point Tool</label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);"><input type="checkbox" id="setToolLine" style="width:16px;height:16px;accent-color:var(--accent-blue);"> Line Tool</label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);"><input type="checkbox" id="setToolFreehand" style="width:16px;height:16px;accent-color:var(--accent-blue);"> Freehand Tool</label>
+                                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-primary);"><input type="checkbox" id="setToolErase" style="width:16px;height:16px;accent-color:var(--accent-blue);"> Erase Tool</label>
+                            </div>
+                        </div>
+
+                        <div class="scard" style="grid-column:1/-1;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <div class="scard-title" style="margin-bottom:0;">🎨 Quick Colors</div>
+                                <button onclick="addQuickColor()" style="font-size:11px;font-weight:700;background:rgba(46,204,113,0.15);border:1px solid rgba(46,204,113,0.3);color:var(--accent-green);padding:5px 12px;border-radius:5px;cursor:pointer;">+ Add Color</button>
+                            </div>
+                            <div class="scard-hint" style="margin-bottom:14px;">Customize the colors available in the quick select palette.</div>
+                            <div id="quickColorsList" style="display:flex;flex-wrap:wrap;gap:10px;"></div>
+                        </div>
+
+                        <div class="scard">
                             <div class="scard-title">🔤 Label Size</div>
                             <div class="scard-hint">Size of text labels shown on drill hole points.</div>
                             <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
@@ -2596,6 +2660,12 @@
             cacheMinZoom: 10,
             cacheMaxZoom: 17,
             defaultBaseLayer: 'Grey Canvas',   // title of the base layer to activate on load
+            uiLayout: 'default',
+            quickColors: ['#e74c3c', '#f7a800', '#2ecc71', '#3b9eff', '#9b59b6'],
+            qdbScale: 1.0,
+            markupStrokeWidth: 4,
+            markupPointRadius: 10,
+            enabledTools: { point: true, line: true, freehand: true, erase: true }
         };
 
         function getCoordE() { return appSettings.coordinateE || 'Longitude'; }
@@ -2759,15 +2829,18 @@
                 const b = parseInt(baseColor.slice(5, 7), 16);
                 strokeColor = `rgba(${r},${g},${b},0.9)`;
             }
+            const ptRadius = appSettings.markupPointRadius || 10;
+            const stWidth = appSettings.markupStrokeWidth || 4;
+
             return new ol.style.Style({
                 image: new ol.style.Circle({
-                    radius: 10,
+                    radius: ptRadius,
                     fill: new ol.style.Fill({ color: strokeColor }),
                     stroke: new ol.style.Stroke({ color: 'rgba(255,255,255,0.9)', width: 2 })
                 }),
                 stroke: new ol.style.Stroke({
                     color: strokeColor,
-                    width: 4,
+                    width: stWidth,
                     lineCap: 'round',
                     lineJoin: 'round'
                 })
@@ -2800,6 +2873,11 @@
             currentHoleLabelSize = (appSettings.holeLabelSize || 12) + 'px';
             const czl = document.getElementById('cacheZoomLabel');
             if (czl) czl.textContent = `${appSettings.cacheMinZoom ?? 10}–${appSettings.cacheMaxZoom ?? 17}`;
+
+            applyUILayout();
+            applyQdbScale();
+            renderQuickColorsUI();
+            applyEnabledTools();
 
             
             
@@ -3402,6 +3480,20 @@
             });
             updateExportFolderLabel();
             updateExportQueueUI();
+            
+            document.getElementById('settingsUILayout').value = appSettings.uiLayout || 'default';
+            document.getElementById('settingsQdbScale').value = appSettings.qdbScale || 1.0;
+            document.getElementById('settingsQdbScaleVal').textContent = (appSettings.qdbScale || 1.0) + 'x';
+            document.getElementById('settingsMarkupStroke').value = appSettings.markupStrokeWidth || 4;
+            document.getElementById('settingsMarkupStrokeVal').textContent = (appSettings.markupStrokeWidth || 4) + 'px';
+            document.getElementById('settingsMarkupPoint').value = appSettings.markupPointRadius || 10;
+            document.getElementById('settingsMarkupPointVal').textContent = (appSettings.markupPointRadius || 10) + 'px';
+            const tools = appSettings.enabledTools || {};
+            document.getElementById('setToolPoint').checked = tools.point !== false;
+            document.getElementById('setToolLine').checked = tools.line !== false;
+            document.getElementById('setToolFreehand').checked = tools.freehand !== false;
+            document.getElementById('setToolErase').checked = tools.erase !== false;
+            renderQuickColorsSettingsList();
         }
 
         window.exportSettingsFile = async function() {
@@ -3428,6 +3520,12 @@
                 tapSlop:    appSettings.tapSlop,
                 eraseHitPx: appSettings.eraseHitPx,
                 layerTypes: appSettings.layerTypes,
+                uiLayout: appSettings.uiLayout,
+                quickColors: appSettings.quickColors,
+                qdbScale: appSettings.qdbScale,
+                markupStrokeWidth: appSettings.markupStrokeWidth,
+                markupPointRadius: appSettings.markupPointRadius,
+                enabledTools: appSettings.enabledTools,
             };
             const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             const link = document.createElement('a');
@@ -3466,6 +3564,12 @@
                     if (data.holeLabelSize !== undefined) appSettings.holeLabelSize = data.holeLabelSize;
                     if (data.tapSlop    !== undefined) appSettings.tapSlop    = data.tapSlop;
                     if (data.eraseHitPx !== undefined) appSettings.eraseHitPx = data.eraseHitPx;
+                    if (data.uiLayout !== undefined) appSettings.uiLayout = data.uiLayout;
+                    if (data.quickColors !== undefined) appSettings.quickColors = data.quickColors;
+                    if (data.qdbScale !== undefined) appSettings.qdbScale = data.qdbScale;
+                    if (data.markupStrokeWidth !== undefined) appSettings.markupStrokeWidth = data.markupStrokeWidth;
+                    if (data.markupPointRadius !== undefined) appSettings.markupPointRadius = data.markupPointRadius;
+                    if (data.enabledTools !== undefined) appSettings.enabledTools = data.enabledTools;
                     applyProjection();
                     currentHoleLabelSize = appSettings.holeLabelSize + 'px';
                     // Persist first, then reload so every part of the app picks up the new settings cleanly
@@ -4652,6 +4756,12 @@
                     if (s.tapSlop    !== undefined) appSettings.tapSlop    = s.tapSlop;
                     if (s.eraseHitPx !== undefined) appSettings.eraseHitPx = s.eraseHitPx;
                     if (s.defaultBaseLayer  !== undefined) appSettings.defaultBaseLayer  = s.defaultBaseLayer;
+                    if (s.uiLayout !== undefined) appSettings.uiLayout = s.uiLayout;
+                    if (s.quickColors !== undefined) appSettings.quickColors = s.quickColors;
+                    if (s.qdbScale !== undefined) appSettings.qdbScale = s.qdbScale;
+                    if (s.markupStrokeWidth !== undefined) appSettings.markupStrokeWidth = s.markupStrokeWidth;
+                    if (s.markupPointRadius !== undefined) appSettings.markupPointRadius = s.markupPointRadius;
+                    if (s.enabledTools !== undefined) appSettings.enabledTools = s.enabledTools;
                 }
             } catch(e) {}
         }
@@ -4682,6 +4792,21 @@
             appSettings.tapSlop   = parseInt(document.getElementById('settingsTapSlop').value) || 20;
             appSettings.eraseHitPx = parseInt(document.getElementById('settingsEraseHit').value) || 30;
             appSettings.defaultBaseLayer = document.getElementById('settingsDefaultBase').value || 'Grey Canvas';
+            
+            appSettings.uiLayout = document.getElementById('settingsUILayout').value;
+            appSettings.qdbScale = parseFloat(document.getElementById('settingsQdbScale').value) || 1.0;
+            appSettings.markupStrokeWidth = parseInt(document.getElementById('settingsMarkupStroke').value) || 4;
+            appSettings.markupPointRadius = parseInt(document.getElementById('settingsMarkupPoint').value) || 10;
+            
+            appSettings.enabledTools = {
+                point: document.getElementById('setToolPoint').checked,
+                line: document.getElementById('setToolLine').checked,
+                freehand: document.getElementById('setToolFreehand').checked,
+                erase: document.getElementById('setToolErase').checked
+            };
+
+            const qcInputs = document.querySelectorAll('.setting-quick-color');
+            appSettings.quickColors = Array.from(qcInputs).map(inp => inp.value);
 
             const rows = document.querySelectorAll('.settings-type-row[data-typeid]');
             appSettings.layerTypes = Array.from(rows).map(row => ({
@@ -4700,6 +4825,13 @@
             await persistSettings();
             showToast('✅ Settings saved', 'success');
             closeSettingsModal();
+            
+            applyUILayout();
+            applyQdbScale();
+            renderQuickColorsUI();
+            applyEnabledTools();
+            const markupLayer = map.getLayers().getArray().find(l => l.get('title') === 'Field Markups');
+            if (markupLayer) markupLayer.getSource().changed();
 
             if (drillDataLayerGroup) {
                 drillDataLayerGroup.getLayers().getArray().forEach(layer => {
@@ -4734,9 +4866,16 @@
             appSettings.holeLabelSize = 12;
             appSettings.tapSlop   = 20;
             appSettings.eraseHitPx = 30;
+            appSettings.uiLayout = 'default';
+            appSettings.quickColors = ['#e74c3c', '#f7a800', '#2ecc71', '#3b9eff', '#9b59b6'];
+            appSettings.qdbScale = 1.0;
+            appSettings.markupStrokeWidth = 4;
+            appSettings.markupPointRadius = 10;
+            appSettings.enabledTools = { point: true, line: true, freehand: true, erase: true };
             persistSettings();
             populateSettingsPanel();
             showToast('↺ Settings reset to defaults', 'warning');
+            applyQdbScale();
         };
 
         let _settingsTypeCounter = 100;
@@ -4829,6 +4968,82 @@
                 el.innerHTML = '⚠️ Could not query permission state.';
             });
         };
+
+        function renderQuickColorsSettingsList() {
+            const list = document.getElementById('quickColorsList');
+            if (!list) return;
+            list.innerHTML = '';
+            (appSettings.quickColors || []).forEach((color) => {
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.05);padding:4px;border-radius:6px;';
+                wrap.innerHTML = `
+                    <input type="color" class="setting-quick-color" value="${color}" style="width:30px;height:30px;padding:0;border:none;border-radius:4px;cursor:pointer;background:transparent;">
+                    <button onclick="removeQuickColor(this)" style="background:transparent;border:none;color:#fca5a5;font-size:16px;cursor:pointer;padding:0 4px;line-height:1;" title="Remove">×</button>
+                `;
+                list.appendChild(wrap);
+            });
+        }
+
+        window.addQuickColor = function() {
+            const list = document.getElementById('quickColorsList');
+            if (!list) return;
+            const wrap = document.createElement('div');
+            wrap.style.cssText = 'display:flex;align-items:center;gap:4px;background:rgba(255,255,255,0.05);padding:4px;border-radius:6px;';
+            wrap.innerHTML = `
+                <input type="color" class="setting-quick-color" value="#ffffff" style="width:30px;height:30px;padding:0;border:none;border-radius:4px;cursor:pointer;background:transparent;">
+                <button onclick="removeQuickColor(this)" style="background:transparent;border:none;color:#fca5a5;font-size:16px;cursor:pointer;padding:0 4px;line-height:1;" title="Remove">×</button>
+            `;
+            list.appendChild(wrap);
+        };
+
+        window.removeQuickColor = function(btn) {
+            btn.parentElement.remove();
+        };
+
+        function renderQuickColorsUI() {
+            const qdbColors = document.getElementById('qdb-colors');
+            if (qdbColors) {
+                let html = '<div style="display:flex; flex-direction:column; gap:4px; align-items:center;">';
+                (appSettings.quickColors || []).forEach(color => {
+                    html += `<div class="qdb-swatch" style="background:${color};" data-tip="${color}" onclick="setMarkupColorAll('${color}', this)"></div>`;
+                });
+                html += `<input type="color" id="qdb-colorPicker" value="${currentMarkupColor}" data-tip="Custom colour" onchange="setMarkupColorAll(this.value, null)" title=""></div>`;
+                qdbColors.innerHTML = html;
+            }
+
+            const mpColors = document.querySelector('.color-palette');
+            if (mpColors) {
+                let html = '';
+                (appSettings.quickColors || []).forEach(color => {
+                    html += `<div class="color-swatch" style="background:${color};" title="${color}" onclick="setMarkupColorAll('${color}', this)"></div>`;
+                });
+                html += `<input type="color" id="customColorPicker" value="${currentMarkupColor}" onchange="setMarkupColorAll(this.value, null)" style="width:30px; height:30px; padding:0; cursor:pointer; border:none; background:none; border-radius:50%;">`;
+                mpColors.innerHTML = html;
+            }
+        }
+
+        function applyUILayout() {
+            if (appSettings.uiLayout === 'flipped') document.body.classList.add('layout-flipped');
+            else document.body.classList.remove('layout-flipped');
+        }
+
+        function applyQdbScale() {
+            document.documentElement.style.setProperty('--qdb-scale', appSettings.qdbScale || 1.0);
+        }
+
+        function applyEnabledTools() {
+            const disp = (enabled) => enabled !== false ? '' : 'none';
+            const tools = appSettings.enabledTools || {};
+            
+            const qp = document.getElementById('qdb-Point'); if (qp) qp.style.display = disp(tools.point);
+            const ql = document.getElementById('qdb-LineString'); if (ql) ql.style.display = disp(tools.line);
+            const qf = document.getElementById('qdb-FreehandLine'); if (qf) qf.style.display = disp(tools.freehand);
+            const qe = document.getElementById('qdb-Erase'); if (qe) qe.style.display = disp(tools.erase);
+
+            const mp = document.getElementById('drawBtn-Point'); if (mp) mp.style.display = disp(tools.point);
+            const ml = document.getElementById('drawBtn-LineString'); if (ml) ml.style.display = disp(tools.line);
+            const mf = document.getElementById('drawBtn-FreehandLine'); if (mf) mf.style.display = disp(tools.freehand);
+        }
 
         document.addEventListener('DOMContentLoaded', initializeMap);
     </script>
